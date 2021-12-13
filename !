@@ -1,0 +1,37 @@
+use crate::ast::Expr;
+
+pub fn parse(toks: Vec<(String, String)>) ->
+   Result<(), Box<dyn std::error::Error>> {
+  let mut index = 0;
+  let mut deep: Vec<String> = Vec::new();
+  
+  for i in index..toks.len() {
+  	if toks[i].0 == "br" {
+  	  match toks[i].1 {
+  	  	"(" | "[" | "{" => {
+  	  	  deep.push(toks[i].0);
+  	  	},
+  	  	")" => {
+  	  	  if deep.pop() != Some("(") {
+  	  	  	Err("Round bracket is never closed.")
+  	  	  }
+  	  	},
+  	  	"]" => {
+  	  	  if deep.pop() != Some("[") {
+  	  	  	Err("Rect bracket is never closed.")
+  	  	  }
+  	  	},
+  	  	"}" => {
+  	  	  if deep.pop() != Some("{") {
+  	  	  	Err("Figure bracket is never closed")
+  	  	  }
+  	  	}
+  	  }
+  	}
+  }
+  Ok(())
+}
+
+fn parse_expr(toks: Vec<(String, String)>) {
+  
+}

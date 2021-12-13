@@ -1,21 +1,22 @@
 mod ast;
 
-use std::error::Error;
-use std::io::{ Read };
-use std::fs::File;
 use crate::ast::lexer::Lexer;
+use std::{
+    error::Error,
+    fs::File,
+    io::{BufReader, Read},
+};
 
 fn main() -> Result<(), Box<dyn Error>> {
-  let mut file = File::open("./script.sk")?;
-  let mut contents = String::new();
-  file.read_to_string(&mut contents)?;
-  let lexer = Lexer::new()?;
-  for (typel ,lexema) in lexer.lex(&contents)? {
-    if lexema == "\n" {
-      println!("{},'\\n'",typel);
-      continue;
+    let f = File::open("script.sk")?;
+    let mut buf = String::new();
+    let mut reader = BufReader::new(f);
+    reader.read_to_string(&mut buf)?;
+    let mut lexer: Lexer<File> = Lexer::from_code(buf.as_str());
+    while !lexer.eof() {
+        let token = lexer.read_next()?;
+        println!("Reciving token");
+        println!("{}", token);
     }
-  	println!("{}:'{}'",typel,lexema);
-  }
-  Ok(())
+    Ok(())
 }
