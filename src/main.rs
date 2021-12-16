@@ -1,6 +1,7 @@
 mod ast;
+mod logger;
 
-use crate::ast::lexer::Lexer;
+use crate::{ast::lexer::Lexer, logger::LogLevel};
 use std::{
     error::Error,
     fs::File,
@@ -14,9 +15,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     reader.read_to_string(&mut buf)?;
     let mut lexer: Lexer<File> = Lexer::from_code(buf.as_str());
     while !lexer.eof() {
-        let token = lexer.read_next()?;
+        let token = lexer.read_next();
         println!("Reciving token");
-        println!("{}", token);
+        println!("{:?}", token);
     }
+    println!("{}", LogLevel::Verbose >= LogLevel::Error);
     Ok(())
 }

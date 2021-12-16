@@ -6,6 +6,8 @@ use std::{
     io::{BufRead, BufReader, Read},
 };
 
+use crate::logger::{LogLevel, Logger};
+
 #[derive(Debug, Clone)]
 pub struct Token {
     kind: String,
@@ -30,18 +32,21 @@ impl Display for Token {
 pub struct Lexer<R: Read> {
     input: InputStream<R>,
     cur_tok: Option<Token>,
+    logger: Logger,
 }
 impl<R: Read> Lexer<R> {
     pub fn from_code(code: &str) -> Self {
         Self {
             input: InputStream::from_string(code.to_string()),
             cur_tok: None,
+            logger: Logger::new(LogLevel::Verbose),
         }
     }
     pub fn from_reader(reader: R) -> std::io::Result<Self> {
         Ok(Self {
             input: InputStream::from_reader(reader)?,
             cur_tok: None,
+            logger: Logger::new(LogLevel::Log),
         })
     }
     pub fn eof(&mut self) -> bool {
@@ -64,10 +69,11 @@ impl<R: Read> Lexer<R> {
             self.cur_tok = None;
         } else {
             let ch = self.input.peek();
-            println!("Current char is\"{}\"", ch);
+            self.logger.verb(format!("Current char is \"{}\"", ch));
+
             if ch.is_whitespace() {
-                println!("Skiping whitespace");
-                println!("Skiping comment");
+                self.logger.verb("Skiping whitespace");
+                self.logger.verb("Skiping comment");
             }
             if ch == '/' && (self.input.preview() == '/' || self.input.preview() == '*') {
                 self.skip_comment();
@@ -139,22 +145,19 @@ impl<R: Read> Lexer<R> {
         let mut escaped = false;
         let mut buf = String::new();
         let mut end_buf = String::new();
-        self.input.next();
+        buf.push(self.input.next());
         while !self.input.eof() {
             let ch = self.input.next();
             if escaped {
                 buf.push(ch);
                 escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if end_buf.is_empty() && end.starts_with(ch) {
+            } else if end_buf == end {
+                break;
+            } else if end.starts_with(ch) && end_buf.is_empty() {
                 end_buf.push(ch);
-            } else if end == end_buf {
-                return buf;
-            } else if end.starts_with(end_buf.as_str()) {
-                end_buf.push(ch);
-            } else {
                 buf.push(ch)
+            } else {
+                buf.push(ch);
             }
         }
         buf
@@ -196,6 +199,12 @@ impl<R: Read> Lexer<R> {
                 self.cur_tok = Some(Token {
                     kind: "OP".to_string(),
                     val: buf,
+                });
+            }
+            '<' | '>' => {
+                self.cur_tok = Some(Token {
+                    kind: "OP".to_string(),
+                    val: ch.to_string(),
                 });
             }
             '{' | '}' | '(' | ')' | '[' | ']' | ',' | '.' | ';' | ':' => {
@@ -246,6 +255,9 @@ impl<R: Read> InputStream<R> {
     pub fn next(&mut self) -> char {
         let c = self.peek();
         self.index += 1;
+        if c == '\n' {
+            self.line += 1;
+        }
         c
     }
     pub fn preview(&mut self) -> char {
@@ -276,7 +288,7 @@ impl<R: Read> InputStream<R> {
     }
     pub fn eof(&mut self) -> bool {
         match self.reader {
-            None => self.index > self.buf.len(),
+            None => self.index >= self.buf.len(),
             Some(_) => !self.update_buf(),
         }
     }
@@ -302,7 +314,7 @@ impl<R: Read> InputStream<R> {
         line = line[..end].to_string();
         println!("Returning error");
         Error {
-            col: self.index,
+            col: i,
             line: self.line,
             len: 1,
             line_str: line,
@@ -310,7 +322,7 @@ impl<R: Read> InputStream<R> {
         }
     }
     fn update_buf(&mut self) -> bool {
-        if self.index > self.buf.len() {
+        if self.index >= self.buf.len() {
             self.index = 0;
             match self.reader.as_mut() {
                 Some(reader) => match reader.read_line(&mut self.buf) {
