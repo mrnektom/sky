@@ -1,9 +1,7 @@
-extern crate regress;
-
 use std::{
     fmt::{Debug, Display},
-    fs::File,
     io::{BufRead, BufReader, Read},
+    str::Chars,
 };
 
 use crate::logger::{LogLevel, Logger};
@@ -35,16 +33,19 @@ pub struct Lexer<R: Read> {
     logger: Logger,
 }
 impl<R: Read> Lexer<R> {
-    pub fn from_code(code: &str) -> Self {
+    pub fn from_code(code: &'static str) -> Self {
         Self {
-            input: InputStream::from_string(code.to_string()),
+            input: InputStream::from_string(code),
             cur_tok: None,
             logger: Logger::new(LogLevel::Verbose),
         }
     }
-    pub fn from_reader(reader: R) -> std::io::Result<Self> {
-        Ok(Self {
-            input: InputStream::from_reader(reader)?,
+    pub fn from_reader<T>(reader: T) -> std::io::Result<Lexer<T>>
+    where
+        T: Read,
+    {
+        Ok(Lexer::<T> {
+            input: InputStream::<T>::from_reader(reader)?,
             cur_tok: None,
             logger: Logger::new(LogLevel::Log),
         })
@@ -68,7 +69,12 @@ impl<R: Read> Lexer<R> {
         if self.input.eof() {
             self.cur_tok = None;
         } else {
-            let ch = self.input.peek();
+            let ch = match self.input.peek() {
+                Some(ch) => ch.clone(),
+                None => {
+                    return Err(self.input.croak("Invalid token"));
+                }
+            };
             self.logger.verb(format!("Current char is \"{}\"", ch));
 
             if ch.is_whitespace() {
@@ -97,7 +103,7 @@ impl<R: Read> Lexer<R> {
         }
         println!("Returning token");
         match self.cur_tok.as_ref() {
-            None => Err(self.input.croak("Invalid token".to_string())),
+            None => Err(self.input.croak("Invalid token")),
             Some(tok) => Ok(tok),
         }
     }
@@ -106,8 +112,21 @@ impl<R: Read> Lexer<R> {
         T: Fn(char) -> bool,
     {
         let mut s = String::new();
-        while !self.input.eof() && predicate(self.input.peek()) {
-            s.push(self.input.next());
+        'lp: while !self.input.eof()
+            && predicate(match self.input.peek() {
+                Some(ch) => ch.clone(),
+                None => {
+                    break 'lp;
+                }
+            })
+        {
+            let ch = match self.input.next() {
+                Some(ch) => ch,
+                None => {
+                    break;
+                }
+            };
+            s.push(ch);
         }
         s
     }
@@ -120,22 +139,39 @@ impl<R: Read> Lexer<R> {
             kind: "NUMBER".to_string(),
             val: {
                 let mut buf = String::new();
+                let mut ch = match self.input.next() {
+                    Some(ch) => ch.clone(),
+                    None => {
+                        return;
+                    }
+                };
                 while !self.input.eof() {
-                    if self.input.peek().is_digit(10) {
-                        buf.push(self.input.peek());
-                    } else if self.input.peek() == '.' && !has_dot {
+                    if ch.is_digit(10) {
+                        buf.push(ch);
+                    } else if ch == '.' && !has_dot {
                         has_dot = true;
                     } else {
                         break;
                     }
-                    self.input.next();
+                    ch = match self.input.next() {
+                        Some(ch) => ch,
+                        None => {
+                            break;
+                        }
+                    }
                 }
                 buf
             },
         });
     }
     fn read_string(&mut self) {
-        let end = self.input.peek().to_string();
+        let end = match self.input.peek() {
+            Some(ch) => ch.to_string(),
+            None => {
+                self.cur_tok = None;
+                return;
+            }
+        };
         self.cur_tok = Some(Token {
             kind: "STR_LIT".to_string(),
             val: self.read_escaped(end),
@@ -145,9 +181,19 @@ impl<R: Read> Lexer<R> {
         let mut escaped = false;
         let mut buf = String::new();
         let mut end_buf = String::new();
-        buf.push(self.input.next());
+        buf.push(match self.input.next() {
+            Some(ch) => ch,
+            None => {
+                return buf;
+            }
+        });
         while !self.input.eof() {
-            let ch = self.input.next();
+            let ch = match self.input.next() {
+                Some(ch) => ch,
+                None => {
+                    break;
+                }
+            };
             if escaped {
                 buf.push(ch);
                 escaped = false;
@@ -164,13 +210,23 @@ impl<R: Read> Lexer<R> {
     }
     fn skip_comment(&self) {}
     fn is_ident_start(&mut self) -> bool {
-        let ch = self.input.peek();
+        let ch = match self.input.peek() {
+            Some(ch) => ch.clone(),
+            None => {
+                return false;
+            }
+        };
         ch.is_alphabetic() || ch == '_' || ch == '$'
     }
     fn read_ident(&mut self) {
         let mut buf = String::new();
         while !self.input.eof() {
-            let ch = self.input.peek();
+            let ch = match self.input.next() {
+                Some(ch) => ch,
+                None => {
+                    break;
+                }
+            };
             if ch.is_alphabetic() || ch.is_digit(10) || ch == '_' {
                 buf.push(ch)
             } else {
@@ -185,16 +241,23 @@ impl<R: Read> Lexer<R> {
     }
     fn read_punc(&mut self) {
         let ch = self.input.peek();
-        self.input.next();
+        let ch = match ch {
+            None => {
+                return;
+            }
+            Some(c) => c.clone(),
+        };
         match ch {
             '-' | '+' | '/' | '*' | '=' => {
-                let chp = self.input.peek();
+                let chp = self.input.next();
                 let mut buf = String::from(ch);
-                if chp.is_ascii_punctuation() {
-                    if ch == chp {
-                        buf.push(ch);
-                        self.input.next();
+                match chp {
+                    Some(chp) => {
+                        if chp.is_ascii_punctuation() && chp == ch {
+                            buf.push(chp);
+                        }
                     }
+                    None => (),
                 }
                 self.cur_tok = Some(Token {
                     kind: "OP".to_string(),
@@ -208,6 +271,7 @@ impl<R: Read> Lexer<R> {
                 });
             }
             '{' | '}' | '(' | ')' | '[' | ']' | ',' | '.' | ';' | ':' => {
+                self.input.next();
                 self.cur_tok = Some(Token {
                     kind: "PUNC".to_string(),
                     val: String::from(ch),
@@ -221,12 +285,13 @@ impl<R: Read> Lexer<R> {
 struct InputStream<R: Read> {
     index: usize,
     line: usize,
-    buf: String,
+    buf: Chars<'static>,
     reader: Option<BufReader<R>>,
 }
 
 impl<R: Read> InputStream<R> {
-    pub fn from_string(buf: String) -> Self {
+    pub fn from_string(buf: &'static str) -> Self {
+        let buf: Chars<'static> = buf.chars();
         Self {
             index: 0,
             line: 0,
@@ -234,36 +299,68 @@ impl<R: Read> InputStream<R> {
             reader: None,
         }
     }
-    pub fn from_reader(reader: R) -> std::io::Result<Self> {
+    pub fn from_reader<T>(reader: T) -> std::io::Result<InputStream<T>>
+    where
+        T: Read,
+    {
         let mut buf = String::new();
-        let mut reader = BufReader::new(reader);
+        let mut reader: BufReader<T> = BufReader::new(reader);
         reader.read_line(&mut buf)?;
-        Ok(InputStream {
+        let buf = buf.as_str().chars();
+        let r: InputStream<T> = InputStream {
             index: 0,
             line: 0,
             buf,
             reader: Some(reader),
-        })
+        };
+        Ok(r)
     }
-    pub fn peek(&mut self) -> char {
-        self.update_buf();
-        match self.buf.chars().nth(self.index) {
-            None => '\u{00}',
-            Some(c) => c,
+    pub fn peek(&mut self) -> Option<char> {
+        match self.buf.peekable().peek() {
+            None => {
+                if self.update_buf() {
+                    match self.buf.peekable().peek() {
+                        Some(ch) => Some(ch.clone()),
+                        None => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            Some(c) => Some(c.clone()),
         }
     }
-    pub fn next(&mut self) -> char {
-        let c = self.peek();
+    pub fn next(&mut self) -> Option<char> {
         self.index += 1;
-        if c == '\n' {
-            self.line += 1;
-        }
+        let c = self.buf.next();
+        let c = match c {
+            None => {
+                if self.update_buf() {
+                    self.buf.next();
+                }
+                None
+            }
+            Some(ch) => {
+                if ch == '\n' {
+                    self.line += 1;
+                }
+                Some(ch)
+            }
+        };
         c
     }
     pub fn preview(&mut self) -> char {
-        self.update_buf();
-        match self.buf.chars().nth(self.index + 1) {
-            None => '\u{00}',
+        match self.buf.nth(self.index + 1) {
+            None => {
+                if self.update_buf() {
+                    match self.buf.nth(self.index - 1) {
+                        None => '\0',
+                        Some(ch) => ch,
+                    }
+                } else {
+                    '\0'
+                }
+            }
             Some(c) => c,
         }
     }
@@ -271,8 +368,7 @@ impl<R: Read> InputStream<R> {
         self.update_buf();
         let mut buf = String::new();
         let mut i = self.index.clone();
-        let chs = self.buf.clone();
-        let mut chs = chs.chars();
+        let mut chs = self.buf.clone();
         while !Self::eof(self) {
             match chs.nth(i) {
                 None => {
@@ -288,13 +384,13 @@ impl<R: Read> InputStream<R> {
     }
     pub fn eof(&mut self) -> bool {
         match self.reader {
-            None => self.index >= self.buf.len(),
+            None => self.index >= self.buf.count(),
             Some(_) => !self.update_buf(),
         }
     }
-    pub fn croak(&self, msg: String) -> Error {
+    pub fn croak(&self, msg: &str) -> Error {
         println!("Formatting error message");
-        let mut line = self.buf.clone();
+        let mut line = self.buf.clone().as_str();
         let mut end = 0;
         let mut i = self.index.clone();
         'lp: loop {
@@ -302,7 +398,7 @@ impl<R: Read> InputStream<R> {
                 None => break 'lp,
                 Some(index) => {
                     if index < i {
-                        line = line[index + 1..].to_string();
+                        line = &line[index + 1..];
                         i -= index + 1;
                     } else {
                         end = index;
@@ -311,27 +407,39 @@ impl<R: Read> InputStream<R> {
                 }
             }
         }
-        line = line[..end].to_string();
+        line = &line[..end];
         println!("Returning error");
         Error {
             col: i,
             line: self.line,
             len: 1,
-            line_str: line,
-            msg,
+            line_str: line.to_string(),
+            msg: msg.to_string(),
         }
     }
     fn update_buf(&mut self) -> bool {
-        if self.index >= self.buf.len() {
-            self.index = 0;
+        let lch = match self.buf.last() {
+            Some(ch) => ch,
+            None => '\0',
+        };
+        if self.index >= self.buf.count() {
             match self.reader.as_mut() {
-                Some(reader) => match reader.read_line(&mut self.buf) {
-                    Ok(_) => {
-                        self.line += 1;
-                        true
+                Some(reader) => {
+                    let mut b = String::new();
+                    match reader.read_line(&mut b) {
+                        Ok(_) => {
+                            self.index = 0;
+                            let mut buf = self.buf.as_str().to_string();
+                            buf.clear();
+                            buf.push(lch);
+                            buf.push_str(b.as_str());
+                            self.buf = buf.chars();
+                            self.line += 1;
+                            true
+                        }
+                        Err(_) => false,
                     }
-                    Err(_) => false,
-                },
+                }
                 None => false,
             }
         } else {

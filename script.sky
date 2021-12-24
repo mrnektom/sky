@@ -1,0 +1,4 @@
+let str = "str"
+if str == "str" {
+  print(str)
+}

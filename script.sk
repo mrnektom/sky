@@ -1,4 +1,0 @@
-let arr = [1,a,"some string"];
-if a > 4 {
-  print("Ok")
-}
