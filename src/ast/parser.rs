@@ -1,10 +1,30 @@
-use std::fmt::Display;
+use std::{fmt::Display, fs::File, io::{BufReader, Read}};
 
-use crate::ast::Expr;
+use super::lexer::Lexer;
 
-struct Parser {}
+pub struct Parser<R: Read> {
+    lexer: Lexer<R>,
+}
 
-impl Parser {}
+impl<R: Read> Parser<R> {
+    pub fn from_path(path: &str) -> Result<Parser<File>, Box<dyn std::error::Error>> {
+        let reader = File::open(path)?;
+        let lexer = Lexer::from_reader(reader)?;
+        Ok(Parser::<File> {
+            lexer
+        })
+    }
+    fn is_punc(&mut self, punc: &str) -> bool {
+        if self.lexer.peek().is_none() {
+            return false;
+        }
+        let tok = self.lexer.peek().unwrap();
+        if tok.kind().eq("PUNC") && tok.val().eq(punc) {
+            return true;
+        }
+        false
+    }
+}
 
 #[derive(Debug)]
 struct Error {
