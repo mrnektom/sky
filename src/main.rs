@@ -1,16 +1,20 @@
-mod ast;
-mod logger;
+mod parser;
 
-use ast::lexer::{self, InputStream};
+use parser::lexer::Lexer;
 
-use crate::{ast::lexer::Lexer, logger::LogLevel};
-use std::{error::Error, fs::File, io::{Write, stdout}};
+use std::{
+    error::Error,
+    fs::File,
+    io::{BufReader, Read},
+};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let f = File::open("script.sky")?;
-    let mut lexer = Lexer::from_reader(f)?;
+    let buf = String::new();
+    BufReader::new(f).read_to_string(&mut buf);
+    let mut lexer = Lexer::new(buf.as_str());
     while !lexer.eof() {
-    println!("{}",lexer.next().unwrap());
+        println!("{}", lexer.next().unwrap());
     }
     Ok(())
 }
