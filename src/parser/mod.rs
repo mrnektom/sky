@@ -1,4 +1,5 @@
 mod ast;
+
 pub(crate) mod lexer;
 
 use std::{collections::HashMap, fmt::Display, fs::File, io::Read};
@@ -8,19 +9,12 @@ use self::{
     lexer::{Lexer, TokenKind},
 };
 
-pub struct Parser {
-    lexer: Lexer,
+pub struct Parser<'a> {
+    lexer: Lexer<'a>,
     pub(self) stack: Vec<Expr>,
 }
 
-impl Parser {
-    pub fn from_path(code: &'static str) -> Result<Parser, Box<dyn std::error::Error>> {
-        Ok(Self {
-            lexer: Lexer::new(code),
-            stack: Vec::new(),
-        })
-    }
-}
+impl<'a> Parser<'a> {}
 
 #[derive(Debug)]
 struct Error {

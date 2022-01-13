@@ -1,20 +1,21 @@
 use std::{
     fmt::{Debug, Display},
-    io::{BufRead, BufReader, Read},
     str::Chars,
 };
 
+use self::DelimKind::*;
 use self::LitKind::*;
 use self::TokenKind::*;
 
-#[derive(Debug, Clone)]
-pub(crate) struct Token {
-    pub(super) kind: TokenKind,
-    pub(super) val: Option<String>,
+#[derive(Debug, Clone, PartialEq)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub size: usize,
+    pub index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum TokenKind {
+pub enum TokenKind {
     LineComment,
     BlockComment,
     Ident,
@@ -30,6 +31,8 @@ pub(crate) enum TokenKind {
     Gt,
     /// "."
     Dot,
+    /// ","
+    Comma,
     /// "!"
     Not,
     /// "&"
@@ -58,13 +61,17 @@ pub(crate) enum TokenKind {
     /// "-"
     Sub,
     /// ":"
-    DoubleDot,
+    Colon,
     /// "@"
     At,
     /// ";"
     Semi,
     /// "?"
     Question,
+
+    Whitespace,
+
+    Unkown,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -76,36 +83,36 @@ pub enum DelimKind {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum LitKind {
-    Int,
-    Float,
+    Int { suff_off: Option<usize> },
+    Float { suff_off: Option<usize> },
     Str,
-    Bool,
 }
 
-impl Token {
-    pub fn new(kind: TokenKind, val: String) -> Self {
-        Self {
-            kind,
-            val: Some(val),
-        }
-    }
-}
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("[{:#?}: {:#?}]", self.kind, self.val))
+        f.write_fmt(format_args!("[{:#?}: {:#?}]", self.kind, self.size))
     }
 }
-pub struct Lexer {
-    input: Cursor,
+
+fn is_id_start(ch: char) -> bool {
+    matches!(ch,'a'..='z'|'A'..='Z'|'_')
+}
+
+fn is_id_continue(ch: char) -> bool {
+    matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '#' | '$' | '@')
+}
+
+pub struct Lexer<'a> {
+    input: Cursor<'a>,
     cur_tok: Option<Token>,
 }
-impl Lexer {
-    pub fn new(code: &'static str) -> Self {
-        let l = Self {
+impl<'a> Lexer<'a> {
+    pub fn new(code: &'a str) -> Self {
+        let mut l = Self {
             input: Cursor::new(code),
             cur_tok: None,
         };
-        l.read_token();
+        l.peek();
         l
     }
     pub fn eof(&mut self) -> bool {
@@ -113,19 +120,19 @@ impl Lexer {
     }
     pub fn peek(&mut self) -> Option<&Token> {
         if self.cur_tok.is_none() {
-            self.read_token();
+            self.cur_tok = self.read_token();
         }
         self.cur_tok.as_ref()
     }
-    pub fn next(&self) -> Option<Token> {
-        let tok = self.cur_tok;
-        self.read_token();
+    pub fn next(&mut self) -> Option<Token> {
+        let tok = self.cur_tok.clone();
+        self.cur_tok = self.read_token();
         tok
     }
-    pub fn read_token(&mut self) {
+    pub fn read_token(&mut self) -> Option<Token> {
         if self.input.eof() {
             self.cur_tok = None;
-            return;
+            return None;
         }
         let ch = self.input.next().unwrap();
         let tok_kind = match ch {
@@ -133,8 +140,15 @@ impl Lexer {
             '$' => Dollar,
             '&' => And,
             '|' => Or,
-            ':' => DoubleDot,
+            ':' => Colon,
             '.' => Dot,
+            ',' => Comma,
+            '(' => OpenDelim { kind: Paren },
+            ')' => CloseDelim { kind: Paren },
+            '[' => OpenDelim { kind: Bracket },
+            ']' => CloseDelim { kind: Bracket },
+            '{' => OpenDelim { kind: Brace },
+            '}' => CloseDelim { kind: Brace },
             ';' => Semi,
             '+' => Add,
             '-' => Sub,
@@ -148,25 +162,42 @@ impl Lexer {
             '>' => Gt,
             '%' => Percent,
             '"' => self.read_double_quoted_string(),
-            '\"' => self.read_single_quoted_string(),
+            '\'' => self.read_single_quoted_string(),
             c @ '0'..='9' => self.read_number(c),
-            c if is_id_start(c) => self.read_ident(c),
-            _ => self.read_unkown(),
+            c if is_id_start(c) => self.read_ident(),
+            c if c.is_whitespace() => self.eat_whitespace(),
+            _ => Unkown,
         };
+        let token = Token {
+            kind: tok_kind,
+            index: self.input.get_index() - self.input.get_len(),
+            size: self.input.get_len(),
+        };
+        self.input.reset_len();
+        Some(token)
     }
 
-    fn eat_while<T>(&mut self, predicate: T)
+    fn eat_while<T>(&mut self, mut predicate: T, skip: u32)
     where
-        T: FnMut([Option<char>; 2]) -> bool,
+        T: FnMut(&mut Self, Option<char>, Option<char>) -> bool,
     {
-        while predicate([self.input.peek(), self.input.preview()]) {
+        let mut first = self.input.peek();
+        let mut second = self.input.preview();
+        while predicate(self, first, second) && !self.eof() {
+            self.input.next();
+            first = self.input.peek();
+            second = self.input.preview();
+        }
+        for _ in 0..skip {
             self.input.next();
         }
     }
     fn read_number(&mut self, first: char) -> TokenKind {
         if first == '0' {
             if self.input.eof() {
-                return TokenKind::Lit { kind: LitKind::Int };
+                return TokenKind::Lit {
+                    kind: LitKind::Int { suff_off: None },
+                };
             }
             match self.input.peek().unwrap() {
                 'b' => self.eat_bin_number(),
@@ -180,121 +211,267 @@ impl Lexer {
     }
 
     fn eat_dec_number(&mut self) -> TokenKind {
-        self.eat_while(|[first, second]| match first {
-            Some('0'..='9') => true,
-            _ => false,
-        });
-        if let Some('.') = self.input.peek() {
-            self.input.next();
-            self.eat_while(|[first, second]| match first {
+        self.eat_while(
+            |_, first, _| match first {
                 Some('0'..='9') => true,
                 _ => false,
-            });
+            },
+            0,
+        );
+        if let Some('.') = self.input.peek() {
+            self.input.next();
+            self.eat_while(
+                |_, first, _| match first {
+                    Some('0'..='9') => true,
+                    _ => false,
+                },
+                0,
+            );
             let suff_off = self.input.get_len();
-            self.eat_suffix();
-            return Lit { kind: Float };
+            self.eat_num_suffix();
+            return Lit {
+                kind: Float {
+                    suff_off: Some(suff_off),
+                },
+            };
         }
         if let Some('u') | Some('i') = self.input.peek() {
             let suff_off = self.input.get_len();
-            self.eat_suffix();
+            self.eat_num_suffix();
+            return Lit {
+                kind: Int {
+                    suff_off: Some(suff_off),
+                },
+            };
         }
-        Lit { kind: Int }
+        Lit {
+            kind: Int { suff_off: None },
+        }
     }
     fn eat_oct_number(&mut self) -> TokenKind {
-        self.eat_while(|[first, second]| match first {
-            Some('0'..='7') => true,
-            _ => false,
-        });
-        if let Some('.') = self.input.peek() {
-            self.input.next();
-            self.eat_while(|[first, second]| match first {
+        self.eat_while(
+            |_, first, _| match first {
                 Some('0'..='7') => true,
                 _ => false,
-            });
+            },
+            0,
+        );
+        if let Some('.') = self.input.peek() {
+            self.input.next();
+            self.eat_while(
+                |_, first, _| match first {
+                    Some('0'..='7') => true,
+                    _ => false,
+                },
+                0,
+            );
             let suff_off = self.input.get_len();
-            self.eat_suffix();
-            return Lit { kind: Float };
+            self.eat_num_suffix();
+            return Lit {
+                kind: Float {
+                    suff_off: Some(suff_off),
+                },
+            };
         }
         if let Some('u') | Some('i') = self.input.peek() {
             let suff_off = self.input.get_len();
-            self.eat_suffix();
+            self.eat_num_suffix();
+            return Lit {
+                kind: Int {
+                    suff_off: Some(suff_off),
+                },
+            };
         }
-        Lit { kind: Int }
+        Lit {
+            kind: Int { suff_off: None },
+        }
     }
     fn eat_bin_number(&mut self) -> TokenKind {
-        self.eat_while(|[first, second]| match first {
-            Some('0'..='1') => true,
-            _ => false,
-        });
-        if let Some('.') = self.input.peek() {
-            self.input.next();
-            self.eat_while(|[first, second]| match first {
+        self.eat_while(
+            |_, first, _| match first {
                 Some('0'..='1') => true,
                 _ => false,
-            });
-            let suff_off = self.input.get_len();
-            self.eat_suffix();
-            return Lit { kind: Float };
-        }
-        if let Some('u') | Some('i') = self.input.peek() {
-            let suff_off = self.input.get_len();
-            self.eat_suffix();
-        }
-        Lit { kind: Int }
-    }
-    fn eat_hex_number(&mut self) -> TokenKind {
-        self.eat_while(|[first, second]| match first {
-            Some('0'..='9' | 'a'..='f' | 'A'..='F') => true,
-            _ => false,
-        });
+            },
+            0,
+        );
         if let Some('.') = self.input.peek() {
             self.input.next();
-            self.eat_while(|[first, second]| {
-                matches!(first, Some('0'..='1' | 'a'..='f' | 'A'..='F'))
-            });
+            self.eat_while(
+                |_, first, _| match first {
+                    Some('0'..='1') => true,
+                    _ => false,
+                },
+                0,
+            );
             let suff_off = self.input.get_len();
-            self.eat_suffix();
-            return Lit { kind: Float };
+            self.eat_num_suffix();
+            return Lit {
+                kind: Float {
+                    suff_off: Some(suff_off),
+                },
+            };
         }
         if let Some('u') | Some('i') = self.input.peek() {
             let suff_off = self.input.get_len();
+            self.eat_num_suffix();
+            return Lit {
+                kind: Int {
+                    suff_off: Some(suff_off),
+                },
+            };
+        }
+        Lit {
+            kind: Int { suff_off: None },
+        }
+    }
+    fn eat_hex_number(&mut self) -> TokenKind {
+        self.eat_while(
+            |_, first, _| match first {
+                Some('0'..='9' | 'a'..='f' | 'A'..='F') => true,
+                _ => false,
+            },
+            0,
+        );
+        if let Some('.') = self.input.peek() {
             self.input.next();
-            self.eat_suffix();
+            self.eat_while(
+                |_, first, _| matches!(first, Some('0'..='1' | 'a'..='f' | 'A'..='F')),
+                0,
+            );
+            let suff_off = self.input.get_len();
+            self.eat_num_suffix();
+            return Lit {
+                kind: Float {
+                    suff_off: Some(suff_off),
+                },
+            };
         }
-        Lit { kind: Int }
+        if let Some('u') | Some('i') = self.input.peek() {
+            let suff_off = self.input.get_len();
+            self.eat_num_suffix();
+            return Lit {
+                kind: Int {
+                    suff_off: Some(suff_off),
+                },
+            };
+        }
+        Lit {
+            kind: Int { suff_off: None },
+        }
     }
-    fn eat_suffix(&mut self) {
-        match self.input.peek() {
-            Some('0'..='9') => {
-                self.eat_while(|[ch, _]| matches!(ch, Some('0'..='9')));
+    fn eat_num_suffix(&mut self) {
+        if let Some('u') | Some('i') = self.input.peek() {
+            self.input.next();
+            match self.input.peek() {
+                Some('0'..='9') => {
+                    self.eat_while(|_, ch, _| matches!(ch, Some('0'..='9')), 0);
+                }
+                Some('a'..='z') => self.eat_while(|_, c, _| matches!(c, Some('a'..='z')), 0),
+                _ => (),
             }
-            Some('a'..='z') => self.eat_while(|[c, _]| matches!(c, Some('a'..='z'))),
         }
     }
-    fn read_string(&mut self) {}
+    fn read_double_quoted_string(&mut self) -> TokenKind {
+        self.eat_while(
+            |_, first, second| match second {
+                Some('"') => matches!(first, Some('\\')),
+                _ => true,
+            },
+            2,
+        );
+        Lit { kind: Str }
+    }
+    fn read_single_quoted_string(&mut self) -> TokenKind {
+        self.eat_while(
+            |_, first, second| match second {
+                Some('\'') => matches!(first, Some('\\')),
+                _ => true,
+            },
+            0,
+        );
+        Lit { kind: Str }
+    }
+    fn read_div_or_comment(&mut self) -> TokenKind {
+        match self.input.peek() {
+            Some('*') => self.eat_block_comment(),
+            Some('/') => self.eat_line_comment(),
+            _ => Div,
+        }
+    }
+    fn eat_line_comment(&mut self) -> TokenKind {
+        self.eat_while(
+            |s, first, second| match first {
+                Some('\n') => {
+                    if let Some('\r') = second {
+                        s.input.next();
+                    }
+                    false
+                }
+                _ => true,
+            },
+            1,
+        );
+        LineComment
+    }
+    fn eat_block_comment(&mut self) -> TokenKind {
+        self.eat_while(
+            |_, first, second| match second {
+                Some('/') => !matches!(first, Some('*')),
+                _ => true,
+            },
+            2,
+        );
+        BlockComment
+    }
+    fn read_ident(&mut self) -> TokenKind {
+        self.eat_while(
+            |_, first, _| match first {
+                Some(ch) => is_id_continue(ch),
+                None => false,
+            },
+            0,
+        );
+        Ident
+    }
+    fn eat_whitespace(&mut self) -> TokenKind {
+        self.eat_while(
+            |_, ch, _| {
+                if let Some(ch) = ch {
+                    ch.is_whitespace()
+                } else {
+                    false
+                }
+            },
+            0,
+        );
+        Whitespace
+    }
 }
 
-pub(crate) struct Cursor {
+pub(crate) struct Cursor<'a> {
     len: usize,
-    buf: Chars<'static>,
+    index: usize,
+    buf: Chars<'a>,
 }
 
-impl Cursor {
-    pub fn new(buf: &'static str) -> Self {
+impl<'a> Cursor<'a> {
+    pub fn new(buf: &'a str) -> Self {
         Self {
             len: 0,
+            index: 0,
             buf: buf.chars(),
         }
     }
-    pub fn peek(&mut self) -> Option<char> {
+    pub fn peek(&self) -> Option<char> {
         self.buf.clone().next()
     }
     pub fn next(&mut self) -> Option<char> {
         self.len += 1;
+        self.index += 1;
         self.buf.next()
     }
-    pub fn preview(&mut self) -> Option<char> {
-        let b = self.buf.clone();
+    pub fn preview(&self) -> Option<char> {
+        let mut b = self.buf.clone();
         b.next();
         b.next()
     }
@@ -304,49 +481,44 @@ impl Cursor {
     pub fn reset_len(&mut self) {
         self.len = 0;
     }
+    pub fn get_index(&self) -> usize {
+        self.index
+    }
     pub fn eof(&mut self) -> bool {
         self.buf.as_str().is_empty()
     }
 }
+#[cfg(test)]
+mod tests {
 
-pub struct Error {
-    col: usize,
-    line: usize,
-    len: usize,
-    line_str: String,
-    msg: String,
-}
-impl Error {
-    pub fn new(col: usize, line: usize, len: usize, line_str: String, msg: String) -> Self {
-        Self {
-            col,
-            line,
-            len,
-            line_str,
-            msg,
-        }
+    use crate::parser::lexer::{is_id_continue, Token, TokenKind};
+
+    use super::{Cursor, Lexer};
+    #[test]
+    fn is_id_continue_test() {
+        assert!(!is_id_continue(' '));
+        assert!(is_id_continue('_'));
+    }
+
+    #[test]
+    fn lexer_test() {
+        let mut lexer = Lexer::new("let s = 'str'");
+        let token = lexer.next();
+        assert_eq!(
+            token,
+            Some(Token {
+                kind: TokenKind::Ident,
+                index: 0,
+                size: 3
+            })
+        );
+    }
+    #[test]
+    fn cursor_test() {
+        let mut cursor = Cursor::new("abc");
+        assert_eq!(Some('a'), cursor.peek());
+        assert_eq!(Some('b'), cursor.preview());
+        assert_eq!(Some('a'), cursor.next());
+        assert_eq!(Some('b'), cursor.peek());
     }
 }
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}({}:{})", self.msg, self.line, self.col))
-    }
-}
-impl Debug for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut marker = String::new();
-        for _ in 0..self.col {
-            marker.push(' ');
-        }
-        marker.push('^');
-        f.write_fmt(format_args!(
-            "{}({}:{})\n\n{}\n{}",
-            self.msg,
-            self.line + 1,
-            self.col + 1,
-            self.line_str,
-            marker
-        ))
-    }
-}
-impl std::error::Error for Error {}

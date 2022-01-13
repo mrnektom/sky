@@ -10,11 +10,13 @@ use std::{
 
 fn main() -> Result<(), Box<dyn Error>> {
     let f = File::open("script.sky")?;
-    let buf = String::new();
-    BufReader::new(f).read_to_string(&mut buf);
+    let mut buf = String::new();
+    BufReader::new(f).read_to_string(&mut buf)?;
     let mut lexer = Lexer::new(buf.as_str());
     while !lexer.eof() {
-        println!("{}", lexer.next().unwrap());
+        let tok = lexer.next().unwrap();
+        println!("{:?}", tok);
+        println!("{}", buf[tok.index..tok.index + tok.size].to_string())
     }
     Ok(())
 }
