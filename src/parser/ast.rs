@@ -1,6 +1,6 @@
 #[derive(Debug, Clone)]
 pub enum Expr {
-    Num(String),
+    Num(NumExpr),
     Str(String),
     Access(Box<Expr>, Box<Expr>),
     BinOp(String, Box<Expr>, Box<Expr>),
@@ -10,6 +10,25 @@ pub enum Expr {
     Call(Box<Expr>, Vec<Expr>),
     List(Vec<Expr>),
     Null,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum NumExpr {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32(i32),
+    I64,
+    I128,
+    F8,
+    F16,
+    F32,
+    F64,
+    F128,
 }
 
 impl Expr {
