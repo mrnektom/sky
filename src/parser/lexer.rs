@@ -219,7 +219,7 @@ fn is_id_start(ch: char) -> bool {
 fn is_id_continue(ch: char) -> bool {
     matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '#' | '$' | '@')
 }
-
+#[derive(Debug)]
 pub struct Lexer<'a> {
     input: Cursor<'a>,
     cur_tok: Option<Token>,
@@ -234,7 +234,7 @@ impl<'a> Lexer<'a> {
         l
     }
     pub fn eof(&mut self) -> bool {
-        self.input.eof()
+        self.input.eof() && self.cur_tok.is_none()
     }
     pub fn peek(&mut self) -> Option<&Token> {
         if self.cur_tok.is_none() {
@@ -327,11 +327,11 @@ impl<'a> Lexer<'a> {
                 _ => self.eat_dec_number(),
             }
         } else {
-            self.eat_dec_number()
+            self.eat_number()
         }
     }
 
-    fn eat_dec_number(&mut self) -> TokenKind {
+    fn eat_number(&mut self) -> TokenKind {
         self.eat_while(
             |_, first, _| match first {
                 Some('0'..='9') => true,
@@ -339,7 +339,51 @@ impl<'a> Lexer<'a> {
             },
             0,
         );
-        if let Some('.') = self.input.peek() {
+        if let (Some('.'), Some('0'..='9')) = (self.input.peek(), self.input.preview()) {
+            self.input.next();
+            self.eat_while(
+                |_, first, _| match first {
+                    Some('0'..='9') => true,
+                    _ => false,
+                },
+                0,
+            );
+            let suff_off = self.input.get_len();
+            self.eat_num_suffix();
+            return Lit {
+                kind: Float {
+                    base: None,
+                    suff_off: Some(suff_off),
+                },
+            };
+        }
+        if let Some('u') | Some('i') | Some('f') = self.input.peek() {
+            let suff_off = self.input.get_len();
+            self.eat_num_suffix();
+            return Lit {
+                kind: Int {
+                    base: None,
+                    suff_off: Some(suff_off),
+                },
+            };
+        }
+        Lit {
+            kind: Int {
+                base: None,
+                suff_off: None,
+            },
+        }
+    }
+    fn eat_dec_number(&mut self) -> TokenKind {
+        self.input.next();
+        self.eat_while(
+            |_, first, _| match first {
+                Some('0'..='9') => true,
+                _ => false,
+            },
+            0,
+        );
+        if let (Some('.'), Some('0'..='9')) = (self.input.peek(), self.input.preview()) {
             self.input.next();
             self.eat_while(
                 |_, first, _| match first {
@@ -357,7 +401,7 @@ impl<'a> Lexer<'a> {
                 },
             };
         }
-        if let Some('u') | Some('i') = self.input.peek() {
+        if let Some('u') | Some('i') | Some('f') = self.input.peek() {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
@@ -375,6 +419,7 @@ impl<'a> Lexer<'a> {
         }
     }
     fn eat_oct_number(&mut self) -> TokenKind {
+        self.input.next();
         self.eat_while(
             |_, first, _| match first {
                 Some('0'..='7') => true,
@@ -382,7 +427,7 @@ impl<'a> Lexer<'a> {
             },
             0,
         );
-        if let Some('.') = self.input.peek() {
+        if let (Some('.'), Some('0'..='7')) = (self.input.peek(), self.input.preview()) {
             self.input.next();
             self.eat_while(
                 |_, first, _| match first {
@@ -400,7 +445,7 @@ impl<'a> Lexer<'a> {
                 },
             };
         }
-        if let Some('u') | Some('i') = self.input.peek() {
+        if let Some('u') | Some('i') | Some('f') = self.input.peek() {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
@@ -418,6 +463,7 @@ impl<'a> Lexer<'a> {
         }
     }
     fn eat_bin_number(&mut self) -> TokenKind {
+        self.input.next();
         self.eat_while(
             |_, first, _| match first {
                 Some('0'..='1') => true,
@@ -425,7 +471,7 @@ impl<'a> Lexer<'a> {
             },
             0,
         );
-        if let Some('.') = self.input.peek() {
+        if let (Some('.'), Some('0'..='1')) = (self.input.peek(), self.input.preview()) {
             self.input.next();
             self.eat_while(
                 |_, first, _| match first {
@@ -443,7 +489,7 @@ impl<'a> Lexer<'a> {
                 },
             };
         }
-        if let Some('u') | Some('i') = self.input.peek() {
+        if let Some('u') | Some('i') | Some('f') = self.input.peek() {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
@@ -461,6 +507,7 @@ impl<'a> Lexer<'a> {
         }
     }
     fn eat_hex_number(&mut self) -> TokenKind {
+        self.input.next();
         self.eat_while(
             |_, first, _| match first {
                 Some('0'..='9' | 'a'..='f' | 'A'..='F') => true,
@@ -468,22 +515,27 @@ impl<'a> Lexer<'a> {
             },
             0,
         );
-        if let Some('.') = self.input.peek() {
+        if let (Some('.'), Some('0'..='9' | 'a'..='f' | 'A'..='F')) =
+            (self.input.peek(), self.input.preview())
+        {
             self.input.next();
             self.eat_while(
                 |_, first, _| matches!(first, Some('0'..='1' | 'a'..='f' | 'A'..='F')),
                 0,
             );
-            let suff_off = self.input.get_len();
+            let mut suff = None;
+            if let Some('f') = self.input.peek() {
+                suff = Some(self.input.get_len());
+            }
             self.eat_num_suffix();
             return Lit {
                 kind: Float {
                     base: Some(NumBase::Hex),
-                    suff_off: Some(suff_off),
+                    suff_off: suff,
                 },
             };
         }
-        if let Some('u') | Some('i') = self.input.peek() {
+        if let Some('u') | Some('i') | Some('f') = self.input.peek() {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
@@ -501,7 +553,7 @@ impl<'a> Lexer<'a> {
         }
     }
     fn eat_num_suffix(&mut self) {
-        if let Some('u') | Some('i') = self.input.peek() {
+        if let Some('u' | 'i' | 'f') = self.input.peek() {
             self.input.next();
             match self.input.peek() {
                 Some('0'..='9') => {
@@ -588,7 +640,7 @@ impl<'a> Lexer<'a> {
         Whitespace
     }
 }
-
+#[derive(Debug)]
 pub(crate) struct Cursor<'a> {
     len: usize,
     index: usize,

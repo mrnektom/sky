@@ -1,15 +1,12 @@
 mod parser;
 
-use parser::{lexer::Lexer, Parser};
+use parser::{ast::Expr, Parser};
 
-use std::{
-    error::Error,
-    fs::File,
-    io::{BufReader, Read},
-};
+use std::{error::Error, mem::size_of_val};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut parser = Parser::new("10");
-    parser.compute_expr();
+    let mut parser = Parser::new(r#"0b111111111"#);
+    let expr = parser.parse_top();
+    println!("{:#?}", expr);
     Ok(())
 }

@@ -1,157 +1,210 @@
-mod ast;
+pub mod ast;
 
 pub(crate) mod lexer;
 
-use std::{fmt::Display, slice::SliceIndex};
+use std::{fmt::Display, slice::SliceIndex, usize};
 
 use self::{
-    ast::Expr,
+    ast::{Expr, NumExpr},
     lexer::{Lexer, LitKind, Token, TokenKind},
 };
-
-enum TempVal {
-    Expr(Expr),
-    Token(Token),
-}
-
-impl TempVal {
-    pub(self) fn get_tok(self) -> Option<Token> {
-        match self {
-            Self::Token(tok) => Some(tok),
-            _ => None,
-        }
-    }
-    pub(self) fn get_expr(self) -> Option<Expr> {
-        match self {
-            Self::Expr(expr) => Some(expr),
-            _ => None,
-        }
-    }
-    pub(self) fn is_expr(&self) -> bool {
-        matches!(self, Self::Expr(_))
-    }
-    pub(self) fn is_tok(&self) -> bool {
-        matches!(self, Self::Token(_))
-    }
-}
-
+#[derive(Debug)]
 pub struct Parser<'a> {
-    code: &'a str,
     lexer: Lexer<'a>,
-    pub(self) stack: Vec<TempVal>,
+    pub(self) stack: Vec<Expr>,
+    code: &'a str,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(code: &'a str) -> Self {
         Self {
-            code,
             lexer: Lexer::new(code),
             stack: Vec::new(),
+            code,
         }
     }
-    pub fn compute_expr(&mut self) {
+    pub fn parse_top(&mut self) -> Expr {
+        let mut exprs = Vec::new();
         while !self.lexer.eof() {
-            let tok = self.lexer.peek().unwrap();
-            match tok.kind {
+            self.parse_expr();
+            if !self.stack.is_empty() {
+                exprs.push(self.stack.pop().unwrap());
+            } else {
+                break;
+            }
+        }
+        if exprs.len() == 1 {
+            exprs.pop().unwrap()
+        } else {
+            Expr::CodeBlock(exprs)
+        }
+    }
+    fn parse_expr(&mut self) {
+        self.parse_atom();
+        self.maybe_call();
+        self.maybe_binary();
+    }
+    fn parse_atom(&mut self) {
+        self.skip_whitespace();
+        let tok = self.lexer.peek();
+        if tok.is_none() {
+            return;
+        }
+        let tok = tok.unwrap().to_owned();
+        match tok.kind {
+            TokenKind::Lit { kind } => match kind {
+                LitKind::Int { .. } | LitKind::Float { .. } => self.parse_num(),
+                LitKind::Str => self.parse_str(),
+            },
+            _ => self.print_error("Invalid token recivied", tok.index, tok.size),
+        }
+    }
+    fn parse_num(&mut self) {
+        if let Some(Token {
+            kind:
                 TokenKind::Lit {
-                    kind: LitKind::Int { base, suff_off },
-                } => {
-                    self.stack.push(TempVal::Token(self.lexer.next().unwrap()));
-                    self.compute_num();
+                    kind: LitKind::Int { base, suff_off } | LitKind::Float { base, suff_off },
+                },
+            size,
+            index,
+        }) = self.lexer.next()
+        {
+            let mut start = index;
+            let mut end = index + size;
+            let mut radix = 10;
+            if let Some(base) = base {
+                start += 2;
+                radix = base.into();
+            }
+            let suff = match suff_off {
+                Some(offset) => {
+                    end = index + offset;
+                    self.code.get(index + offset..index + size)
                 }
-                _ => {
-                    self.print_error();
+                None => None,
+            };
+            println!("{:#?}", (index, size, suff_off));
+            let mut val = self.code.get(start..end).unwrap();
+
+            let expr = Expr::Num(match suff {
+                Some("i32") => {
+                    if val.contains('.') {
+                        val = val.get(..val.find('.').unwrap()).unwrap();
+                    }
+                    NumExpr::I32(i32::from_str_radix(val, radix).unwrap())
+                }
+                Some("i64") => {
+                    if val.contains('.') {
+                        val = val.get(..val.find('.').unwrap()).unwrap();
+                    }
+                    NumExpr::I64(i64::from_str_radix(val, radix).unwrap())
+                }
+                Some("u32") => {
+                    if val.contains('.') {
+                        val = val.get(..val.find('.').unwrap()).unwrap();
+                    }
+                    NumExpr::U32(u32::from_str_radix(val, radix).unwrap())
+                }
+                Some("u64") => {
+                    if val.contains('.') {
+                        val = val.get(..val.find('.').unwrap()).unwrap();
+                    }
+                    NumExpr::U64(u64::from_str_radix(val, radix).unwrap())
+                }
+                Some("f32") => NumExpr::F32(val.parse().unwrap()),
+                Some("f64") => NumExpr::F64(val.parse().unwrap()),
+                None if val.contains('.') => NumExpr::F32(val.parse().unwrap()),
+                None => NumExpr::I32(i32::from_str_radix(val, radix).unwrap()),
+                Some(suff) => {
+                    self.print_error(
+                        format!("Invalid number suffix recivied \"{}\"", suff).as_str(),
+                        index + suff_off.unwrap(),
+                        suff.len(),
+                    );
                     return;
                 }
-            }
+            });
+            self.stack.push(expr);
         }
     }
-    fn compute_num(&mut self) {
-        if self.stack.is_empty() {
-            return;
-        }
-        let tok = self.stack.pop().unwrap();
-        if tok.is_expr() {
-            return;
-        }
-        let tok = tok.get_tok().unwrap();
-        match tok.kind {
-            TokenKind::Lit {
-                kind: LitKind::Int { base, suff_off },
-            } => {
-                let mut start = tok.index;
-                let mut end = 0;
-                if base.is_some() {
-                    start += 2;
-                }
-                if suff_off.is_none() {
-                    end = tok.index + tok.size;
-                } else {
-                    end = tok.index + suff_off.unwrap();
-                }
-                let num = self.code.get(start..end);
-                let base: u32 = if let Some(base) = base {
-                    base.into()
-                } else {
-                    10
-                };
-                println!("{}", base);
-            }
-            _ => (),
+    fn parse_str(&mut self) {
+        if let Some(Token {
+            kind: _,
+            size,
+            index,
+        }) = self.lexer.next()
+        {
+            let string = self.code.get(index + 1..index + size - 1).unwrap();
+
+            self.stack.push(Expr::Str(escape_str(string)));
         }
     }
-    fn can_reduce(&self) {}
-    fn reduce(&self) {}
-    fn line_by_index(&self, index: usize) -> (String, usize) {
+
+    fn maybe_call(&self) {}
+    fn maybe_binary(&self) {}
+
+    fn print_error(&self, msg: &str, index: usize, len: usize) {
+        eprintln!("{}:", msg);
+        let (offset, line) = self.line_by_index(index);
+        eprintln!("{}", line);
+        eprintln!("{}{}", " ".repeat(offset), "^".repeat(len));
+    }
+    fn line_by_index(&self, index: usize) -> (usize, String) {
         let mut start = index;
         let mut end = index;
-        while let Some(ch) = self.code.get(start..=start) {
-            if ch.chars().next().unwrap() == '\n' || start == 0 {
+        while start > 0 {
+            if let Some("\n") = self.code.get(start..=start) {
                 break;
             }
             start -= 1;
         }
-        while let Some(ch) = self.code.get(end..=end) {
-            if ch.chars().next().unwrap() == '\n' || end == usize::MAX {
+        while end < usize::MAX {
+            if let Some("\n") | None = self.code.get(end..=end) {
                 break;
             }
             end += 1;
         }
-
         (
-            self.code.get(start..end).unwrap().to_string(),
             index - start,
+            self.code.get(start..end).unwrap().to_string(),
         )
     }
-    fn print_error(&mut self) {
-        let tok = self.lexer.peek().unwrap().clone();
-        let (line, offset) = self.line_by_index(tok.index);
-        println!(
-            "I don't understand this token \"{}\":\n{}",
-            self.code.get(tok.index..tok.index + tok.size).unwrap(),
-            line
-        );
-        let mut buf = String::new();
-        buf.push_str(" ".repeat(offset).as_str());
-        buf.push_str("^".repeat(tok.size).as_str());
-        println!("{}", buf);
+    fn skip_whitespace(&mut self) {
+        if let Some(Token {
+            kind: TokenKind::Whitespace,
+            ..
+        }) = self.lexer.peek()
+        {
+            self.lexer.next();
+        }
     }
 }
 
-#[derive(Debug)]
-struct Error {
-    text: String,
-}
-impl Error {
-    fn new(msg: String) -> Self {
-        Self { text: msg }
-    }
+fn escape_str(src: &str) -> String {
+    let mut buf = String::new();
+    iterate_str(src, |one, two| match one {
+        Some('\\') => match two {
+            Some('n') => buf.push('\n'),
+            Some('r') => buf.push('\r'),
+            Some('\\') => buf.push('\\'),
+            _ => (),
+        },
+        Some(ch) => buf.push(ch),
+        None => (),
+    });
+    buf
 }
 
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.text.as_str())
+fn iterate_str<CB>(s: &str, mut call_back: CB)
+where
+    CB: FnMut(Option<char>, Option<char>),
+{
+    let mut chars = s.chars();
+    let mut one = chars.next();
+    let mut two = chars.next();
+    while one.is_some() {
+        call_back(one, two);
+        one = chars.next();
+        two = chars.next();
     }
 }
-
-impl std::error::Error for Error {}
