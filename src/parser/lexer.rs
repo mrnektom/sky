@@ -39,6 +39,8 @@ pub enum TokenKind {
     And,
     /// "|"
     Or,
+    /// "^"
+    Caret,
     /// Delims like "{}","()","[]""
     OpenDelim {
         kind: DelimKind,
@@ -76,117 +78,21 @@ pub enum TokenKind {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DelimKind {
+    /// "[]"
     Bracket,
+    /// "{}"
     Brace,
+    /// "()"
     Paren,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum LitKind {
-    Int {
-        base: Option<NumBase>,
-        suff_off: Option<usize>,
-    },
-    Float {
+    Num {
         base: Option<NumBase>,
         suff_off: Option<usize>,
     },
     Str,
-}
-
-impl LitKind {
-    pub fn has_base(&self) -> bool {
-        match self {
-            Self::Int {
-                base: Some(_),
-                suff_off: _,
-            } => true,
-            Self::Float {
-                base: Some(_),
-                suff_off: _,
-            } => true,
-            _ => false,
-        }
-    }
-    pub fn has_suff(&self) -> bool {
-        match self {
-            Self::Int {
-                base: _,
-                suff_off: Some(_),
-            } => true,
-            Self::Float {
-                base: _,
-                suff_off: Some(_),
-            } => true,
-            _ => false,
-        }
-    }
-    pub fn is_int(&self) -> bool {
-        match self {
-            Self::Int {
-                base: _,
-                suff_off: _,
-            } => true,
-            _ => false,
-        }
-    }
-    pub fn is_float(&self) -> bool {
-        matches!(
-            self,
-            Self::Float {
-                base: _,
-                suff_off: _
-            }
-        )
-    }
-    pub fn is_bin(&self) -> bool {
-        matches!(
-            self,
-            Self::Int {
-                base: Some(NumBase::Bin),
-                suff_off: _
-            } | Self::Float {
-                base: Some(NumBase::Bin),
-                suff_off: _
-            }
-        )
-    }
-    pub fn is_oct(&self) -> bool {
-        matches!(
-            self,
-            Self::Int {
-                base: Some(NumBase::Oct),
-                suff_off: _
-            } | Self::Float {
-                base: Some(NumBase::Oct),
-                suff_off: _
-            }
-        )
-    }
-    pub fn is_dec(&self) -> bool {
-        matches!(
-            self,
-            Self::Int {
-                base: Some(NumBase::Dec),
-                suff_off: _
-            } | Self::Float {
-                base: Some(NumBase::Dec),
-                suff_off: _
-            }
-        )
-    }
-    pub fn is_hex(&self) -> bool {
-        matches!(
-            self,
-            Self::Int {
-                base: Some(NumBase::Hex),
-                suff_off: _
-            } | Self::Float {
-                base: Some(NumBase::Hex),
-                suff_off: _
-            }
-        )
-    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -223,12 +129,14 @@ fn is_id_continue(ch: char) -> bool {
 pub struct Lexer<'a> {
     input: Cursor<'a>,
     cur_tok: Option<Token>,
+    code: &'a str,
 }
 impl<'a> Lexer<'a> {
     pub fn new(code: &'a str) -> Self {
         let mut l = Self {
             input: Cursor::new(code),
             cur_tok: None,
+            code,
         };
         l.peek();
         l
@@ -236,11 +144,11 @@ impl<'a> Lexer<'a> {
     pub fn eof(&mut self) -> bool {
         self.input.eof() && self.cur_tok.is_none()
     }
-    pub fn peek(&mut self) -> Option<&Token> {
+    pub fn peek(&mut self) -> Option<Token> {
         if self.cur_tok.is_none() {
             self.cur_tok = self.read_token();
         }
-        self.cur_tok.as_ref()
+        self.cur_tok.clone()
     }
     pub fn next(&mut self) -> Option<Token> {
         let tok = self.cur_tok.clone();
@@ -258,6 +166,7 @@ impl<'a> Lexer<'a> {
             '$' => Dollar,
             '&' => And,
             '|' => Or,
+            '^' => Caret,
             ':' => Colon,
             '.' => Dot,
             ',' => Comma,
@@ -314,7 +223,7 @@ impl<'a> Lexer<'a> {
         if first == '0' {
             if self.input.eof() {
                 return TokenKind::Lit {
-                    kind: LitKind::Int {
+                    kind: LitKind::Num {
                         base: None,
                         suff_off: None,
                     },
@@ -351,7 +260,7 @@ impl<'a> Lexer<'a> {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
-                kind: Float {
+                kind: Num {
                     base: None,
                     suff_off: Some(suff_off),
                 },
@@ -361,14 +270,14 @@ impl<'a> Lexer<'a> {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
-                kind: Int {
+                kind: Num {
                     base: None,
                     suff_off: Some(suff_off),
                 },
             };
         }
         Lit {
-            kind: Int {
+            kind: Num {
                 base: None,
                 suff_off: None,
             },
@@ -395,7 +304,7 @@ impl<'a> Lexer<'a> {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
-                kind: Float {
+                kind: Num {
                     base: Some(NumBase::Dec),
                     suff_off: Some(suff_off),
                 },
@@ -405,14 +314,14 @@ impl<'a> Lexer<'a> {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
-                kind: Int {
+                kind: Num {
                     base: Some(NumBase::Dec),
                     suff_off: Some(suff_off),
                 },
             };
         }
         Lit {
-            kind: Int {
+            kind: Num {
                 base: Some(NumBase::Dec),
                 suff_off: None,
             },
@@ -439,7 +348,7 @@ impl<'a> Lexer<'a> {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
-                kind: Float {
+                kind: Num {
                     base: Some(NumBase::Oct),
                     suff_off: Some(suff_off),
                 },
@@ -449,14 +358,14 @@ impl<'a> Lexer<'a> {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
-                kind: Int {
+                kind: Num {
                     base: Some(NumBase::Oct),
                     suff_off: Some(suff_off),
                 },
             };
         }
         Lit {
-            kind: Int {
+            kind: Num {
                 base: Some(NumBase::Oct),
                 suff_off: None,
             },
@@ -483,7 +392,7 @@ impl<'a> Lexer<'a> {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
-                kind: Float {
+                kind: Num {
                     base: Some(NumBase::Bin),
                     suff_off: Some(suff_off),
                 },
@@ -493,14 +402,14 @@ impl<'a> Lexer<'a> {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
-                kind: Int {
+                kind: Num {
                     base: Some(NumBase::Bin),
                     suff_off: Some(suff_off),
                 },
             };
         }
         Lit {
-            kind: Int {
+            kind: Num {
                 base: Some(NumBase::Bin),
                 suff_off: None,
             },
@@ -520,18 +429,36 @@ impl<'a> Lexer<'a> {
         {
             self.input.next();
             self.eat_while(
-                |_, first, _| matches!(first, Some('0'..='1' | 'a'..='f' | 'A'..='F')),
+                |_, first, _| matches!(first, Some('0'..='9' | 'a'..='f' | 'A'..='F')),
                 0,
             );
-            let mut suff = None;
-            if let Some('f') = self.input.peek() {
-                suff = Some(self.input.get_len());
+            let val = self
+                .code
+                .get(self.input.get_index() - self.input.get_len()..self.input.get_index())
+                .unwrap();
+            if val.ends_with("f64") || val.ends_with("f32") {
+                return Lit {
+                    kind: Num {
+                        base: Some(NumBase::Hex),
+                        suff_off: Some(self.input.get_len() - 3),
+                    },
+                };
+            }
+            if let Some('u') | Some('i') | Some('f') = self.input.peek() {
+                let suff_off = self.input.get_len();
+                self.eat_num_suffix();
+                return Lit {
+                    kind: Num {
+                        base: Some(NumBase::Hex),
+                        suff_off: Some(suff_off),
+                    },
+                };
             }
             self.eat_num_suffix();
             return Lit {
-                kind: Float {
+                kind: Num {
                     base: Some(NumBase::Hex),
-                    suff_off: suff,
+                    suff_off: None,
                 },
             };
         }
@@ -539,14 +466,29 @@ impl<'a> Lexer<'a> {
             let suff_off = self.input.get_len();
             self.eat_num_suffix();
             return Lit {
-                kind: Int {
+                kind: Num {
                     base: Some(NumBase::Hex),
                     suff_off: Some(suff_off),
                 },
             };
         }
+        let val = self
+            .code
+            .get(self.input.get_index()..self.input.get_index() + self.input.get_len())
+            .unwrap();
+        println!("{}", val.len());
+        if val.ends_with("f64") || val.ends_with("f32") {
+            let suff_off = self.input.get_index() - 3;
+            return Lit {
+                kind: Num {
+                    base: Some(NumBase::Hex),
+                    suff_off: Some(suff_off),
+                },
+            };
+        }
+
         Lit {
-            kind: Int {
+            kind: Num {
                 base: Some(NumBase::Hex),
                 suff_off: None,
             },
