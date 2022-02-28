@@ -1,5 +1,5 @@
 # sky
-Sky is a simple scripting language written on Rust.
+Sky is a simple compling language written on Rust.
 
 # Todo
 
