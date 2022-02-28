@@ -7,14 +7,14 @@ use self::DelimKind::*;
 use self::LitKind::*;
 use self::TokenKind::*;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub size: usize,
     pub index: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TokenKind {
     LineComment,
     BlockComment,
@@ -99,7 +99,6 @@ pub enum LitKind {
 pub enum NumBase {
     Bin,
     Oct,
-    Dec,
     Hex,
 }
 impl Into<u32> for NumBase {
@@ -107,7 +106,6 @@ impl Into<u32> for NumBase {
         match self {
             Self::Bin => 2,
             Self::Oct => 8,
-            Self::Dec => 10,
             Self::Hex => 16,
         }
     }
@@ -141,6 +139,10 @@ impl<'a> Lexer<'a> {
         l.peek();
         l
     }
+    pub fn get_str(&self, len: usize) -> Option<&str> {
+        let index = self.cur_tok?.index;
+        self.code.get(index..index + len)
+    }
     pub fn eof(&mut self) -> bool {
         self.input.eof() && self.cur_tok.is_none()
     }
@@ -155,7 +157,7 @@ impl<'a> Lexer<'a> {
         self.cur_tok = self.read_token();
         tok
     }
-    pub fn read_token(&mut self) -> Option<Token> {
+    fn read_token(&mut self) -> Option<Token> {
         if self.input.eof() {
             self.cur_tok = None;
             return None;
@@ -215,8 +217,10 @@ impl<'a> Lexer<'a> {
             first = self.input.peek();
             second = self.input.preview();
         }
-        for _ in 0..skip {
-            self.input.next();
+        if skip > 0 {
+            for _ in 0..skip {
+                self.input.next();
+            }
         }
     }
     fn read_number(&mut self, first: char) -> TokenKind {
@@ -233,7 +237,7 @@ impl<'a> Lexer<'a> {
                 'b' => self.eat_bin_number(),
                 'o' => self.eat_oct_number(),
                 'x' => self.eat_hex_number(),
-                _ => self.eat_dec_number(),
+                _ => self.eat_number(),
             }
         } else {
             self.eat_number()
@@ -279,50 +283,6 @@ impl<'a> Lexer<'a> {
         Lit {
             kind: Num {
                 base: None,
-                suff_off: None,
-            },
-        }
-    }
-    fn eat_dec_number(&mut self) -> TokenKind {
-        self.input.next();
-        self.eat_while(
-            |_, first, _| match first {
-                Some('0'..='9') => true,
-                _ => false,
-            },
-            0,
-        );
-        if let (Some('.'), Some('0'..='9')) = (self.input.peek(), self.input.preview()) {
-            self.input.next();
-            self.eat_while(
-                |_, first, _| match first {
-                    Some('0'..='9') => true,
-                    _ => false,
-                },
-                0,
-            );
-            let suff_off = self.input.get_len();
-            self.eat_num_suffix();
-            return Lit {
-                kind: Num {
-                    base: Some(NumBase::Dec),
-                    suff_off: Some(suff_off),
-                },
-            };
-        }
-        if let Some('u') | Some('i') | Some('f') = self.input.peek() {
-            let suff_off = self.input.get_len();
-            self.eat_num_suffix();
-            return Lit {
-                kind: Num {
-                    base: Some(NumBase::Dec),
-                    suff_off: Some(suff_off),
-                },
-            };
-        }
-        Lit {
-            kind: Num {
-                base: Some(NumBase::Dec),
                 suff_off: None,
             },
         }
@@ -568,7 +528,7 @@ impl<'a> Lexer<'a> {
         );
         Ident
     }
-    fn eat_whitespace(&mut self) -> TokenKind {
+    pub fn eat_whitespace(&mut self) -> TokenKind {
         self.eat_while(
             |_, ch, _| {
                 if let Some(ch) = ch {
@@ -601,9 +561,10 @@ impl<'a> Cursor<'a> {
         self.buf.clone().next()
     }
     pub fn next(&mut self) -> Option<char> {
-        self.len += 1;
-        self.index += 1;
-        self.buf.next()
+        let c = self.buf.next();
+        self.len += c.unwrap().to_string().len();
+        self.index += c.unwrap().to_string().len();
+        c
     }
     pub fn preview(&self) -> Option<char> {
         let mut b = self.buf.clone();

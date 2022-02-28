@@ -2,15 +2,37 @@
 pub enum Expr {
     Num(NumExpr),
     Str(String),
-    BinOp(BinOpKind, Box<Expr>, Box<Expr>),
+    BinOp(Box<BinOp>),
     CodeBlock(Vec<Expr>),
     Closure(Vec<Expr>, Box<Expr>),
-    If(Box<Expr>, Box<Expr>, Box<Expr>),
-    Call(Box<Expr>, Vec<Expr>),
+    If(Box<IfExpr>),
+    Call(Box<Call>),
     List(Vec<Expr>),
     Null,
 }
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+pub struct IfExpr {
+    pub cond: Expr,
+    pub then_branch: Expr,
+    pub else_branch: Expr,
+}
+
+/// structure of binary operator node
+#[derive(Debug, Clone)]
+pub struct BinOp {
+    pub kind: BinOpKind,
+    pub left: Expr,
+    pub right: Expr,
+}
+
+/// sructure of call node
+#[derive(Debug, Clone)]
+pub struct Call {
+    pub callee: Expr,
+    pub args: Vec<Expr>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOpKind {
     /// pattern = expr
     Assign,
