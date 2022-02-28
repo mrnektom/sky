@@ -5,9 +5,17 @@ Sky is a simple scripting language written on Rust.
 
  - [x] lexer (~93%)
  - [ ] parser (~7%)
- - [ ] preprocessor.
- - [ ] simple tree runtime.
- - [ ] bytecode compiler.
- - [ ] bytecode runtime.
- - [ ] bytecode optimizer.
- - [ ] llvm bitcode frontend.
+ - - [x] number
+ - - [x] string literal
+ - - [x] tuple
+ - - [x] call
+ - - [ ] if
+ - - [ ] for
+ - - [ ] while
+ - - [ ] let
+ - - [ ] function
+ - - [ ] structure
+ - - [ ] enum
+ - [ ] semanthic analyzer
+ - [ ] preprocessor
+ - [ ] llvm bitcode frontend
