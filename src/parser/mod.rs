@@ -2,8 +2,12 @@ pub mod ast;
 
 pub(crate) mod lexer;
 
+use crate::parser::ast::BinOp;
+use crate::parser::lexer::DelimKind;
+use std::fmt::{Display, Formatter};
 use std::usize;
 
+use self::ast::Call;
 use self::{
     ast::{BinOpKind, Expr, NumExpr},
     lexer::{Lexer, LitKind, Token, TokenKind},
@@ -11,7 +15,7 @@ use self::{
 #[derive(Debug)]
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
-    stack: Vec<Expr>,
+    pub errors: Vec<ParseError<'a>>,
     code: &'a str,
 }
 
@@ -19,16 +23,16 @@ impl<'a> Parser<'a> {
     pub fn new(code: &'a str) -> Self {
         Self {
             lexer: Lexer::new(code),
-            stack: Vec::new(),
+            errors: Vec::new(),
             code,
         }
     }
     pub fn parse_top(&mut self) -> Expr {
         let mut exprs = Vec::new();
         while !self.lexer.eof() {
-            self.parse_expr();
-            if !self.stack.is_empty() {
-                exprs.push(self.stack.pop().unwrap());
+            let expr = self.parse_expr();
+            if expr.is_some() {
+                exprs.push(expr.unwrap());
             } else {
                 break;
             }
@@ -39,27 +43,30 @@ impl<'a> Parser<'a> {
             Expr::CodeBlock(exprs)
         }
     }
-    fn parse_expr(&mut self) {
-        self.parse_atom();
-        self.maybe_call();
-        self.maybe_binary();
+    fn parse_expr(&mut self) -> Option<Expr> {
+        let mut expr = self.parse_atom()?;
+        expr = self.maybe_call(expr);
+        expr = self.maybe_binary(expr);
+        Some(expr)
     }
-    fn parse_atom(&mut self) {
+    fn parse_atom(&mut self) -> Option<Expr> {
         self.skip_whitespace();
-        let tok = self.lexer.peek();
-        if tok.is_none() {
-            return;
-        }
-        let tok = tok.unwrap().to_owned();
+        let tok = self.lexer.peek()?;
         match tok.kind {
             TokenKind::Lit { kind } => match kind {
                 LitKind::Num { .. } => self.parse_num(),
                 LitKind::Str => self.parse_str(),
             },
-            _ => self.print_error("Invalid token recivied", tok.index, tok.size),
+            TokenKind::OpenDelim {
+                kind: DelimKind::Paren,
+            } => self.parse_tuple(),
+            _ => {
+                self.push_error("Invalid token received", tok.index, tok.size);
+                None
+            }
         }
     }
-    fn parse_num(&mut self) {
+    fn parse_num(&mut self) -> Option<Expr> {
         if let Some(Token {
             kind:
                 TokenKind::Lit {
@@ -83,117 +90,165 @@ impl<'a> Parser<'a> {
                 }
                 None => None,
             };
-            let mut val = self.code.get(start..end).unwrap();
-
+            let mut val = self.code.get(start..end)?;
+            let base = match base {
+                None => 10,
+                Some(b) => b.into(),
+            };
             let expr = Expr::Num(match suff {
                 Some("i32") => {
                     if val.contains('.') {
-                        val = val.get(..val.find('.').unwrap()).unwrap();
+                        val = val.get(..val.find('.')?)?;
                     }
-                    NumExpr::I32(i32::from_str_radix(val, radix).unwrap())
+                    NumExpr::I32(i32::from_str_radix(val, radix).ok()?)
                 }
                 Some("i64") => {
                     if val.contains('.') {
-                        val = val.get(..val.find('.').unwrap()).unwrap();
+                        val = val.get(..val.find('.')?)?;
                     }
-                    NumExpr::I64(i64::from_str_radix(val, radix).unwrap())
+                    NumExpr::I64(i64::from_str_radix(val, radix).ok()?)
                 }
                 Some("u32") => {
                     if val.contains('.') {
-                        val = val.get(..val.find('.').unwrap()).unwrap();
+                        val = val.get(..val.find('.')?)?;
                     }
-                    NumExpr::U32(u32::from_str_radix(val, radix).unwrap())
+                    NumExpr::U32(u32::from_str_radix(val, radix).ok()?)
                 }
                 Some("u64") => {
                     if val.contains('.') {
-                        val = val.get(..val.find('.').unwrap()).unwrap();
+                        val = val.get(..val.find('.')?)?;
                     }
-                    NumExpr::U64(u64::from_str_radix(val, radix).unwrap())
+                    NumExpr::U64(u64::from_str_radix(val, radix).ok()?)
                 }
-                Some("f32") => NumExpr::F32(parse_based_f32(base.unwrap().into(), val).unwrap()),
-                Some("f64") => NumExpr::F64(parse_based_f64(base.unwrap().into(), val).unwrap()),
-                None if val.contains('.') => NumExpr::F32(val.parse().unwrap()),
-                None => NumExpr::I32(i32::from_str_radix(val, radix).unwrap()),
+                Some("f32") => NumExpr::F32(parse_based_f32(base, val)?),
+                Some("f64") => NumExpr::F64(parse_based_f64(base, val)?),
+                None if val.contains('.') => NumExpr::F32(val.parse().ok()?),
+                None => NumExpr::I32(i32::from_str_radix(val, radix).ok()?),
                 Some(suff) => {
-                    self.print_error(
-                        format!("Invalid number suffix recivied \"{}\"", suff).as_str(),
-                        index + suff_off.unwrap(),
+                    self.push_error(
+                        format!("Invalid number suffix received \"{}\"", suff).as_str(),
+                        index + suff_off?,
                         suff.len(),
                     );
-                    return;
+                    return None;
                 }
             });
-            self.stack.push(expr);
+            Some(expr)
+        } else {
+            None
         }
     }
 
-    fn parse_str(&mut self) {
+    fn parse_str(&mut self) -> Option<Expr> {
         if let Some(Token {
             kind: _,
             size,
             index,
         }) = self.lexer.next()
         {
-            let string = self.code.get(index + 1..index + size - 1).unwrap();
+            let string = self.code.get(index + 1..index + size - 1)?;
 
-            self.stack.push(Expr::Str(escape_str(string)));
+            Some(Expr::Str(escape_str(string)))
+        } else {
+            None
         }
     }
 
-    fn maybe_call(&self) {}
-    fn maybe_binary(&mut self) {
-        self.skip_whitespace();
-        if self.stack.is_empty() {
-            return;
+    fn maybe_call(&mut self, left: Expr) -> Expr {
+        if self.has_str("(") {
+            let args = self.parse_tuple();
+            if args.is_some() {
+                match args.unwrap() {
+                    Expr::List(list) => Expr::Call(Box::new(Call {
+                        args: list,
+                        callee: left,
+                    })),
+                    _ => left,
+                }
+            } else {
+                left
+            }
+        } else {
+            left
         }
+    }
+    fn parse_tuple(&mut self) -> Option<Expr> {
+        self.lexer.eat_whitespace();
+        if self.has_str("(") {
+            self.lexer.next();
+            let mut list = Vec::new();
+            while !self.has_str(")") {
+                let expr = self.parse_expr()?;
+                list.push(expr);
+                if self.has_str(",") {
+                    self.lexer.next();
+                }
+            }
+            self.lexer.eat_whitespace();
+            self.lexer.next();
+            Some(Expr::List(list))
+        } else {
+            None
+        }
+    }
+    fn maybe_binary(&mut self, left: Expr) -> Expr {
+        self.skip_whitespace();
         if self.lexer.eof() {
-            return;
+            return left;
         }
         let Token {
             kind: _,
             size: _,
-            index,
+            index: _,
         } = self.lexer.peek().unwrap();
         if let Some(kind) = self.parse_bin_op() {
             let priory: u8 = kind.clone().into();
-            let last = self.stack.pop();
-            if last.is_none() {
-                let Token {
-                    kind: _,
-                    size: _,
-                    index: i,
-                } = self.lexer.peek().unwrap();
-                self.print_error("Unexpected token", index, i - index);
-                return;
-            }
-            let last = last.unwrap();
             let mut expr: Expr;
-            self.parse_expr();
-            let right = self.stack.pop().unwrap();
-            if let Expr::BinOp(k, l, r) = right {
-                let r_priory: u8 = k.clone().into();
+            let right = self.parse_expr();
+            if right.is_none() {
+                return left;
+            }
+            let right = right.unwrap();
+            if let Expr::BinOp(right) = right {
+                let r_priory: u8 = right.kind.clone().into();
                 if priory >= r_priory {
-                    println!(">");
-                    expr = Expr::BinOp(kind, Box::new(last), l);
-                    expr = Expr::BinOp(k, Box::new(expr), r);
+                    expr = Expr::BinOp(Box::new(BinOp {
+                        kind,
+                        left,
+                        right: right.left,
+                    }));
+                    expr = Expr::BinOp(Box::new(BinOp {
+                        kind: right.kind,
+                        left: expr,
+                        right: right.right,
+                    }));
                 } else {
-                    println!("<");
-                    expr = Expr::BinOp(k, l, r);
-                    expr = Expr::BinOp(kind, Box::new(last), Box::new(expr));
+                    expr = Expr::BinOp(Box::new(BinOp {
+                        kind: right.kind,
+                        left: right.left,
+                        right: right.right,
+                    }));
+                    expr = Expr::BinOp(Box::new(BinOp {
+                        kind,
+                        left,
+                        right: expr,
+                    }));
                 }
             } else {
-                expr = Expr::BinOp(kind, Box::new(last), Box::new(right));
+                expr = Expr::BinOp(Box::new(BinOp { kind, left, right }));
             }
-            self.stack.push(expr);
+            expr
+        } else {
+            left
         }
     }
 
     fn parse_bin_op(&mut self) -> Option<BinOpKind> {
         self.skip_whitespace();
-        match self.lexer.peek().unwrap().kind {
+        match self.lexer.peek()?.kind {
             TokenKind::Eq => {
                 self.lexer.next();
-                Some(match self.lexer.peek().unwrap().kind {
+                Some(match self.lexer.peek()?.kind {
                     TokenKind::Eq => {
                         self.lexer.next();
                         BinOpKind::Eq
@@ -203,7 +258,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Lt => {
                 self.lexer.next();
-                Some(match self.lexer.peek().unwrap().kind {
+                Some(match self.lexer.peek()?.kind {
                     TokenKind::Eq => {
                         self.lexer.next();
                         BinOpKind::LtEq
@@ -213,7 +268,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Gt => {
                 self.lexer.next();
-                Some(match self.lexer.peek().unwrap().kind {
+                Some(match self.lexer.peek()?.kind {
                     TokenKind::Eq => {
                         self.lexer.next();
                         BinOpKind::GtEq
@@ -231,7 +286,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Mul => {
                 self.lexer.next();
-                Some(match self.lexer.peek().unwrap().kind {
+                Some(match self.lexer.peek()?.kind {
                     TokenKind::Mul => {
                         self.lexer.next();
                         BinOpKind::Pow
@@ -245,31 +300,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn print_error(&self, msg: &str, index: usize, len: usize) {
-        eprintln!("{}:", msg);
-        let (offset, line) = self.line_by_index(index);
-        eprintln!("{}", line);
-        eprintln!("{}{}", " ".repeat(offset), "^".repeat(len));
-    }
-    fn line_by_index(&self, index: usize) -> (usize, String) {
-        let mut start = index;
-        let mut end = index;
-        while start > 0 {
-            if let Some("\n") = self.code.get(start..=start) {
-                break;
-            }
-            start -= 1;
-        }
-        while end < usize::MAX {
-            if let Some("\n") | None = self.code.get(end..=end) {
-                break;
-            }
-            end += 1;
-        }
-        (
-            index - start,
-            self.code.get(start..end).unwrap().to_string(),
-        )
+    fn push_error(&mut self, msg: &str, index: usize, len: usize) {
+        self.errors.push(ParseError {
+            msg: msg.to_string(),
+            index,
+            len,
+            source: self.code,
+        });
     }
     fn skip_whitespace(&mut self) {
         if let Some(Token {
@@ -280,6 +317,49 @@ impl<'a> Parser<'a> {
             self.lexer.next();
         }
     }
+    fn has(&mut self, token_type: TokenKind) -> bool {
+        match self.lexer.peek() {
+            None => false,
+            Some(Token { kind, .. }) => kind == token_type,
+        }
+    }
+    fn has_str(&mut self, s: &str) -> bool {
+        let ss = self.lexer.get_str(s.len());
+        if Some(s) == ss {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn line_by_index(index: usize, source: &str) -> (usize, String) {
+    let mut start = index;
+    let mut end = index;
+    while start > 0 {
+        if let Some("\n") = source.get(start..=start) {
+            break;
+        }
+        start -= 1;
+    }
+    while end < usize::MAX {
+        if let Some("\n") | None = source.get(end..=end) {
+            break;
+        }
+        end += 1;
+    }
+    (index - start, source.get(start..end).unwrap().to_string())
+}
+
+fn line_number_by_index(mut index: usize, source: &str) -> usize {
+    let mut line = 0;
+    while index > 0 {
+        index -= 1;
+        if source.get(index..=index) == Some("\n") {
+            line += 1;
+        }
+    }
+    line
 }
 
 fn escape_str(src: &str) -> String {
@@ -347,4 +427,18 @@ pub fn parse_based_f32(base: u32, num: &str) -> Option<f32> {
         left = i32::from_str_radix(num, base).ok()? as f32;
     }
     Some(left)
+}
+#[derive(Debug, Clone)]
+pub struct ParseError<'a> {
+    msg: String,
+    index: usize,
+    len: usize,
+    source: &'a str,
+}
+
+impl<'a> Display for ParseError<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}\n", self.msg)?;
+        write!(f, "{} |", line_number_by_index(self.index, self.source))
+    }
 }

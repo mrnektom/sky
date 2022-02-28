@@ -1,12 +1,13 @@
 mod parser;
 
-use parser::{ast::Expr, Parser};
+use parser::Parser;
 
-use std::{error::Error, mem::size_of_val};
+use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut parser = Parser::new(r#"2 = 6 ** 3"#);
+    let mut parser = Parser::new(r"6(1,0f64,1,2)");
     let expr = parser.parse_top();
-    println!("{:#?}", expr);
+    dbg!(expr);
+    dbg!(parser.errors);
     Ok(())
 }
