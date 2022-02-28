@@ -4,7 +4,7 @@ Sky is a simple scripting language written on Rust.
 # Todo
 
  - [x] lexer (~93%)
- - [ ] parser (~5%)
+ - [ ] parser (~7%)
  - [ ] preprocessor.
  - [ ] simple tree runtime.
  - [ ] bytecode compiler.
