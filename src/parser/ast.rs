@@ -14,7 +14,7 @@ pub enum Expr {
 pub struct IfExpr {
     pub cond: Expr,
     pub then_branch: Expr,
-    pub else_branch: Expr,
+    pub else_branch: Option<Expr>,
 }
 
 /// structure of binary operator node

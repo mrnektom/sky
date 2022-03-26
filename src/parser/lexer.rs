@@ -3,7 +3,6 @@ use std::{
     str::Chars,
 };
 
-use self::DelimKind::*;
 use self::LitKind::*;
 use self::TokenKind::*;
 
@@ -41,13 +40,13 @@ pub enum TokenKind {
     Or,
     /// "^"
     Caret,
-    /// Delims like "{}","()","[]""
-    OpenDelim {
-        kind: DelimKind,
-    },
-    CloseDelim {
-        kind: DelimKind,
-    },
+    /// s like "{}","()","[]""
+    OpenParen,
+    CloseParen,
+    OpenBracket,
+    CloseBracket,
+    OpenBrace,
+    CloseBrace,
     /// "%"
     Percent,
     /// "$"
@@ -74,16 +73,6 @@ pub enum TokenKind {
     Whitespace,
 
     Unkown,
-}
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum DelimKind {
-    /// "[]"
-    Bracket,
-    /// "{}"
-    Brace,
-    /// "()"
-    Paren,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -136,20 +125,21 @@ impl<'a> Lexer<'a> {
             cur_tok: None,
             code,
         };
-        l.peek();
+        l.cur_tok = l.read_token();
         l
     }
     pub fn get_str(&self, len: usize) -> Option<&str> {
         let index = self.cur_tok?.index;
         self.code.get(index..index + len)
     }
+    pub fn get_tok(&self) -> Option<&str> {
+        let tok = self.peek()?;
+        self.code.get(tok.index..tok.index + tok.size)
+    }
     pub fn eof(&mut self) -> bool {
         self.input.eof() && self.cur_tok.is_none()
     }
-    pub fn peek(&mut self) -> Option<Token> {
-        if self.cur_tok.is_none() {
-            self.cur_tok = self.read_token();
-        }
+    pub fn peek(&self) -> Option<Token> {
         self.cur_tok.clone()
     }
     pub fn next(&mut self) -> Option<Token> {
@@ -172,12 +162,12 @@ impl<'a> Lexer<'a> {
             ':' => Colon,
             '.' => Dot,
             ',' => Comma,
-            '(' => OpenDelim { kind: Paren },
-            ')' => CloseDelim { kind: Paren },
-            '[' => OpenDelim { kind: Bracket },
-            ']' => CloseDelim { kind: Bracket },
-            '{' => OpenDelim { kind: Brace },
-            '}' => CloseDelim { kind: Brace },
+            '(' => OpenParen,
+            ')' => CloseParen,
+            '[' => OpenBracket,
+            ']' => CloseBracket,
+            '{' => OpenBrace,
+            '}' => CloseBrace,
             ';' => Semi,
             '+' => Add,
             '-' => Sub,

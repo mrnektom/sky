@@ -2,20 +2,21 @@ pub mod ast;
 
 pub(crate) mod lexer;
 
-use crate::parser::ast::BinOp;
-use crate::parser::lexer::DelimKind;
-use std::fmt::{Display, Formatter};
 use std::usize;
 
-use self::ast::Call;
-use self::{
-    ast::{BinOpKind, Expr, NumExpr},
-    lexer::{Lexer, LitKind, Token, TokenKind},
+use crate::{
+    error::{Error, ErrorKind},
+    parser::{
+        ast::{BinOp, BinOpKind, Call, Expr, NumExpr},
+        lexer::{Lexer, LitKind, Token, TokenKind},
+    },
 };
+
+use self::ast::IfExpr;
 #[derive(Debug)]
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
-    pub errors: Vec<ParseError<'a>>,
+    pub errors: Vec<Error>,
     code: &'a str,
 }
 
@@ -57,14 +58,55 @@ impl<'a> Parser<'a> {
                 LitKind::Num { .. } => self.parse_num(),
                 LitKind::Str => self.parse_str(),
             },
-            TokenKind::OpenDelim {
-                kind: DelimKind::Paren,
-            } => self.parse_tuple(),
+            TokenKind::OpenParen => self.parse_tuple(),
+            TokenKind::OpenBrace => self.parse_block(),
+            TokenKind::Ident => self.parse_ident(),
             _ => {
-                self.push_error("Invalid token received", tok.index, tok.size);
+                self.push_error(ErrorKind::UnexpectedToken, tok.index, tok.size);
                 None
             }
         }
+    }
+    fn parse_ident(&mut self) -> Option<Expr> {
+        match self.lexer.get_tok()? {
+            "if" => self.parse_if(),
+            _ => None,
+        }
+    }
+    fn parse_if(&mut self) -> Option<Expr> {
+        self.lexer.next();
+        let cond = self.parse_expr()?;
+        let then_branch = self.parse_expr()?;
+        let mut else_branch = None;
+        self.skip_whitespace();
+        if self.has_str("else") {
+            self.lexer.next();
+            else_branch = self.parse_expr();
+        }
+        Some(Expr::If(Box::new(IfExpr {
+            cond,
+            then_branch,
+            else_branch,
+        })))
+    }
+    fn parse_block(&mut self) -> Option<Expr> {
+        if !self.has_str("{") {
+            return None;
+        }
+        self.lexer.next();
+        let mut buff = Vec::new();
+        while !self.has_str("}") {
+            buff.push(self.parse_expr()?);
+            if self.has_str(";") {
+                self.lexer.next();
+            }
+            self.skip_whitespace();
+            if self.lexer.get_str(1) == Some("}") {
+                self.lexer.next();
+                break;
+            }
+        }
+        Some(Expr::CodeBlock(buff))
     }
     fn parse_num(&mut self) -> Option<Expr> {
         if let Some(Token {
@@ -126,8 +168,8 @@ impl<'a> Parser<'a> {
                 None => NumExpr::I32(i32::from_str_radix(val, radix).ok()?),
                 Some(suff) => {
                     self.push_error(
-                        format!("Invalid number suffix received \"{}\"", suff).as_str(),
-                        index + suff_off?,
+                        ErrorKind::UnexpectedToken,
+                        suff_off.unwrap_or(0),
                         suff.len(),
                     );
                     return None;
@@ -300,13 +342,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn push_error(&mut self, msg: &str, index: usize, len: usize) {
-        self.errors.push(ParseError {
-            msg: msg.to_string(),
-            index,
-            len,
-            source: self.code,
-        });
+    fn push_error(&mut self, kind: ErrorKind, index: usize, len: usize) {
+        dbg!(self.get_str(index, len));
+        self.errors.push(Error::new(kind, index, len));
     }
     fn skip_whitespace(&mut self) {
         if let Some(Token {
@@ -317,13 +355,13 @@ impl<'a> Parser<'a> {
             self.lexer.next();
         }
     }
-    fn has(&mut self, token_type: TokenKind) -> bool {
-        match self.lexer.peek() {
-            None => false,
-            Some(Token { kind, .. }) => kind == token_type,
-        }
-    }
-    fn has_str(&mut self, s: &str) -> bool {
+    // fn has(&mut self, token_type: TokenKind) -> bool {
+    //     match self.lexer.peek() {
+    //         None => false,
+    //         Some(Token { kind, .. }) => kind == token_type,
+    //     }
+    // }
+    fn has_str(&self, s: &str) -> bool {
         let ss = self.lexer.get_str(s.len());
         if Some(s) == ss {
             true
@@ -331,36 +369,42 @@ impl<'a> Parser<'a> {
             false
         }
     }
+    pub fn get_tok_val(&self, tok: Token) -> Option<&str> {
+        self.code.get(tok.index..(tok.index + tok.size))
+    }
+    pub fn get_str(&self, index: usize, len: usize) -> Option<&str> {
+        self.code.get(index..(index + len))
+    }
 }
 
-fn line_by_index(index: usize, source: &str) -> (usize, String) {
-    let mut start = index;
-    let mut end = index;
-    while start > 0 {
-        if let Some("\n") = source.get(start..=start) {
-            break;
-        }
-        start -= 1;
-    }
-    while end < usize::MAX {
-        if let Some("\n") | None = source.get(end..=end) {
-            break;
-        }
-        end += 1;
-    }
-    (index - start, source.get(start..end).unwrap().to_string())
-}
+// fn line_by_index(index: usize, source: &str) -> (usize, String) {
+//     let mut start = index;
+//     let mut end = index;
+//     while start > 0 {
+//         if let Some("\n") = source.get(start..=start) {
+//             break;
+//         }
+//         start -= 1;
+//     }
+//     while end < usize::MAX {
+//         if let Some("\n") | None = source.get(end..=end) {
+//             break;
+//         }
+//         end += 1;
+//     }
+//     (index - start, source.get(start..end).unwrap().to_string())
+// }
 
-fn line_number_by_index(mut index: usize, source: &str) -> usize {
-    let mut line = 0;
-    while index > 0 {
-        index -= 1;
-        if source.get(index..=index) == Some("\n") {
-            line += 1;
-        }
-    }
-    line
-}
+// fn line_number_by_index(mut index: usize, source: &str) -> usize {
+//     let mut line = 0;
+//     while index > 0 {
+//         index -= 1;
+//         if source.get(index..=index) == Some("\n") {
+//             line += 1;
+//         }
+//     }
+//     line
+// }
 
 fn escape_str(src: &str) -> String {
     let mut buf = String::new();
@@ -427,18 +471,4 @@ pub fn parse_based_f32(base: u32, num: &str) -> Option<f32> {
         left = i32::from_str_radix(num, base).ok()? as f32;
     }
     Some(left)
-}
-#[derive(Debug, Clone)]
-pub struct ParseError<'a> {
-    msg: String,
-    index: usize,
-    len: usize,
-    source: &'a str,
-}
-
-impl<'a> Display for ParseError<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}\n", self.msg)?;
-        write!(f, "{} |", line_number_by_index(self.index, self.source))
-    }
 }

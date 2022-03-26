@@ -5,17 +5,19 @@ Sky is a simple compling language written on Rust.
 
  - [x] lexer (~93%)
  - [ ] parser (~7%)
+ - - [x] block
  - - [x] number
  - - [x] string literal
  - - [x] tuple
  - - [x] call
- - - [ ] if
+ - - [x] if
  - - [ ] for
  - - [ ] while
  - - [ ] let
  - - [ ] function
  - - [ ] structure
  - - [ ] enum
+ - - [ ] type
  - [ ] semanthic analyzer
  - [ ] preprocessor
  - [ ] llvm bitcode frontend
