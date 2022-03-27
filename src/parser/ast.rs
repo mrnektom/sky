@@ -8,8 +8,17 @@ pub enum Expr {
     If(Box<IfExpr>),
     Call(Box<Call>),
     List(Vec<Expr>),
+    VarDef(Box<VarDefExpr>),
     Null,
 }
+
+#[derive(Debug, Clone)]
+pub struct VarDefExpr {
+    pub name: String,
+    pub isMut: bool,
+    pub initial: Option<Box<Expr>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct IfExpr {
     pub cond: Expr,

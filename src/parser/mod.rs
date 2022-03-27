@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use self::ast::IfExpr;
+use self::ast::{IfExpr, VarDefExpr};
 #[derive(Debug)]
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
@@ -34,6 +34,9 @@ impl<'a> Parser<'a> {
             let expr = self.parse_expr();
             if expr.is_some() {
                 exprs.push(expr.unwrap());
+                if self.has_str(";") {
+                    self.lexer.next();
+                }
             } else {
                 break;
             }
@@ -70,6 +73,7 @@ impl<'a> Parser<'a> {
     fn parse_ident(&mut self) -> Option<Expr> {
         match self.lexer.get_tok()? {
             "if" => self.parse_if(),
+            "let" => self.parse_let(),
             _ => None,
         }
     }
@@ -87,6 +91,42 @@ impl<'a> Parser<'a> {
             cond,
             then_branch,
             else_branch,
+        })))
+    }
+    fn parse_let(&mut self) -> Option<Expr> {
+        if !self.has_str("let") {
+            return None;
+        }
+        self.lexer.next();
+        self.skip_whitespace();
+        let mut isMut = false;
+        let mut name = String::new();
+        let mut initial = None;
+        if self.has_str("mut") {
+            isMut = true;
+            self.lexer.next();
+        }
+        self.skip_whitespace();
+        if self.has_type(TokenKind::Ident) {
+            name.push_str(self.lexer.get_tok()?);
+            self.lexer.next();
+        } else {
+            isMut = false;
+            name.push_str("mut");
+        }
+        self.skip_whitespace();
+        dbg!(self.lexer.peek());
+
+        if self.has_type(TokenKind::Eq) {
+            self.lexer.next();
+            self.skip_whitespace();
+            initial = Some(Box::new(self.parse_expr()?));
+        }
+
+        Some(Expr::VarDef(Box::new(VarDefExpr {
+            name,
+            isMut,
+            initial,
         })))
     }
     fn parse_block(&mut self) -> Option<Expr> {
@@ -367,6 +407,13 @@ impl<'a> Parser<'a> {
             true
         } else {
             false
+        }
+    }
+    fn has_type(&self, kind: TokenKind) -> bool {
+        let tok = self.lexer.peek();
+        match tok {
+            Some(tok) => tok.kind == kind,
+            None => false,
         }
     }
     pub fn get_tok_val(&self, tok: Token) -> Option<&str> {
