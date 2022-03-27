@@ -13,7 +13,7 @@ Sky is a simple compling language written on Rust.
  - - [x] if
  - - [ ] for
  - - [ ] while
- - - [ ] let
+ - - [x] let
  - - [ ] function
  - - [ ] structure
  - - [ ] enum
