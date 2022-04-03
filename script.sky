@@ -1,4 +1,0 @@
-let arr = ["str",3.1.4]
-if str == "str" {
-  print(str)
-}
