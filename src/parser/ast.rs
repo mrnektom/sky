@@ -1,14 +1,17 @@
+use super::{scope::ScopePtr, symbols::SymbolPtr};
+
 #[derive(Debug, Clone)]
 pub enum Expr {
     Num(NumExpr),
     Str(String),
     BinOp(Box<BinOp>),
-    CodeBlock(Vec<Expr>),
+    CodeBlock(Vec<Expr>, ScopePtr),
     Closure(Vec<Expr>, Box<Expr>),
     If(Box<IfExpr>),
     Call(Box<Call>),
     List(Vec<Expr>),
     VarDef(Box<VarDefExpr>),
+    Symbol(SymbolPtr),
     Null,
 }
 

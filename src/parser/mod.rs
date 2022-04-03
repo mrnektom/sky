@@ -2,22 +2,29 @@ pub mod ast;
 
 pub(crate) mod lexer;
 
-use std::usize;
+mod scope;
+mod symbols;
+mod types;
+
+use std::{ops::DerefMut, rc::Rc, usize};
 
 use crate::{
     error::{Error, ErrorKind},
     parser::{
-        ast::{BinOp, BinOpKind, Call, Expr, NumExpr},
+        ast::{BinOp, BinOpKind, Call, Expr, IfExpr, NumExpr, VarDefExpr},
         lexer::{Lexer, LitKind, Token, TokenKind},
+        scope::{ScopePtr, ScopeT},
+        symbols::Symbol,
+        types::Type,
     },
 };
 
-use self::ast::{IfExpr, VarDefExpr};
 #[derive(Debug)]
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
     pub errors: Vec<Error>,
     code: &'a str,
+    scope_stack: Vec<ScopePtr>,
 }
 
 impl<'a> Parser<'a> {
@@ -26,10 +33,12 @@ impl<'a> Parser<'a> {
             lexer: Lexer::new(code),
             errors: Vec::new(),
             code,
+            scope_stack: Vec::new(),
         }
     }
-    pub fn parse_top(&mut self) -> Expr {
+    pub fn parse_top(&mut self) -> Option<Expr> {
         let mut exprs = Vec::new();
+        self.scope_stack.push(ScopePtr::new_named("global"));
         while !self.lexer.eof() {
             let expr = self.parse_expr();
             if expr.is_some() {
@@ -42,9 +51,9 @@ impl<'a> Parser<'a> {
             }
         }
         if exprs.len() == 1 {
-            exprs.pop().unwrap()
+            exprs.pop()
         } else {
-            Expr::CodeBlock(exprs)
+            Some(Expr::CodeBlock(exprs, self.scope_stack.pop()?))
         }
     }
     fn parse_expr(&mut self) -> Option<Expr> {
@@ -74,7 +83,9 @@ impl<'a> Parser<'a> {
         match self.lexer.get_tok()? {
             "if" => self.parse_if(),
             "let" => self.parse_let(),
-            _ => None,
+            _ => Some(Expr::Symbol(
+                self.scope().get_sym(self.lexer.get_tok().unwrap()).unwrap(),
+            )),
         }
     }
     fn parse_if(&mut self) -> Option<Expr> {
@@ -122,7 +133,10 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
             initial = Some(Box::new(self.parse_expr()?));
         }
-
+        self.scope().set_sym(
+            name.as_str(),
+            Symbol::Var(Rc::new(Type::from(*initial.unwrap()))),
+        );
         Some(Expr::VarDef(Box::new(VarDefExpr {
             name,
             isMut,
@@ -133,6 +147,8 @@ impl<'a> Parser<'a> {
         if !self.has_str("{") {
             return None;
         }
+        self.scope_stack
+            .push(self.scope_stack.last().unwrap().extend());
         self.lexer.next();
         let mut buff = Vec::new();
         while !self.has_str("}") {
@@ -146,7 +162,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Some(Expr::CodeBlock(buff))
+        Some(Expr::CodeBlock(buff, self.scope_stack.pop().unwrap()))
     }
     fn parse_num(&mut self) -> Option<Expr> {
         if let Some(Token {
@@ -421,6 +437,9 @@ impl<'a> Parser<'a> {
     }
     pub fn get_str(&self, index: usize, len: usize) -> Option<&str> {
         self.code.get(index..(index + len))
+    }
+    fn scope(&self) -> ScopePtr {
+        self.scope_stack.last().unwrap().clone()
     }
 }
 
