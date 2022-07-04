@@ -3,16 +3,26 @@ use std::rc::Rc;
 use super::types::TypeSymbol;
 
 pub type SymbolPtr = Rc<Symbol>;
+
 #[derive(Debug, Clone)]
 pub enum Symbol {
-    Var(TypeSymbol),
-    Type,
+    Var(VarSymbol),
+    Type(TypeSymbol),
     Module,
-    Unkown,
-    Field,
+    Generics(Vec<TypeSymbol>),
+    Unkown(UnkownSymbol),
+}
+#[derive(Debug, Clone)]
+pub struct VarSymbol {
+    pub name: String,
+    pub val_type: TypeSymbol,
+    pub line: usize,
+    pub col: usize,
 }
 
-struct VarSymbol {
-    name: String,
-    val_type: TypeSymbol,
+#[derive(Debug, Clone)]
+pub struct UnkownSymbol {
+    pub name: String,
+    pub line: usize,
+    pub col: usize,
 }

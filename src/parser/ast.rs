@@ -1,24 +1,28 @@
-use super::{scope::ScopePtr, symbols::SymbolPtr};
+use std::collections::HashMap;
+
+use super::{symbols::Symbol, types::Type};
 
 #[derive(Debug, Clone)]
 pub enum Expr {
     Num(NumExpr),
     Str(String),
     BinOp(Box<BinOp>),
-    CodeBlock(Vec<Expr>, ScopePtr),
+    CodeBlock(Vec<Expr>),
     Closure(Vec<Expr>, Box<Expr>),
+    Fn(FnExpr),
     If(Box<IfExpr>),
     Call(Box<Call>),
     List(Vec<Expr>),
     VarDef(Box<VarDefExpr>),
-    Symbol(SymbolPtr),
+    Symbol(Symbol),
+    NSAccess(Box<Expr>, Box<Expr>),
     Null,
 }
 
 #[derive(Debug, Clone)]
 pub struct VarDefExpr {
     pub name: String,
-    pub isMut: bool,
+    pub is_mut: bool,
     pub initial: Option<Box<Expr>>,
 }
 
@@ -42,6 +46,12 @@ pub struct BinOp {
 pub struct Call {
     pub callee: Expr,
     pub args: Vec<Expr>,
+}
+#[derive(Debug, Clone)]
+pub struct FnExpr {
+    pub name: String,
+    pub args: HashMap<String, Type>,
+    pub ret: Box<Expr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

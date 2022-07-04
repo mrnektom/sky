@@ -9,9 +9,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut parser = Parser::new(
         r"
         let mut a = 0;
-        0;
+        a:b.c;
     ",
     );
+
     let expr = parser.parse_top();
     dbg!(expr);
     dbg!(parser.errors);

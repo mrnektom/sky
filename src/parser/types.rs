@@ -1,54 +1,31 @@
-use core::num;
-use std::{collections::HashMap, rc::Rc};
-
-use super::{
-    ast::{Expr, NumExpr},
-    symbols::Symbol,
-};
+use std::rc::Rc;
 
 pub type TypeSymbol = Rc<Type>;
 
 #[derive(Debug, Clone)]
-pub struct Type {
-    name: String,
-    kind: TypeKind,
-    generics: Vec<TypeSymbol>,
-    items: HashMap<String, Symbol>,
-}
-
-#[derive(Debug, Clone)]
-pub enum TypeKind {
-    Struct,
+pub enum Type {
+    Struct(StructType),
     Enum,
-    EnumItem,
+    EnumVariant,
     Trait,
     Primitive,
     Unkown,
 }
 
-impl From<Expr> for Type {
-    fn from(expr: Expr) -> Self {
-        match expr {
-            Expr::Num(num) => Type {
-                name: match num {
-                    NumExpr::F32(_) => "f32",
-                    NumExpr::F64(_) => "f64",
-                    NumExpr::I32(_) => "i32",
-                    NumExpr::I64(_) => "i64",
-                    NumExpr::U32(_) => "u32",
-                    NumExpr::U64(_) => "u64",
-                }
-                .to_string(),
-                generics: Vec::new(),
-                items: HashMap::new(),
-                kind: TypeKind::Primitive,
-            },
-            _ => Type {
-                name: "Unkown".to_string(),
-                generics: Vec::new(),
-                items: HashMap::new(),
-                kind: TypeKind::Unkown,
-            },
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct StructType {
+    name: String,
+    generics: Vec<Generic>,
+    fields: Vec<StructField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructField {
+    name: String,
+    r#type: TypeSymbol,
+}
+#[derive(Debug, Clone)]
+pub struct Generic {
+    name: String,
+    constraint: Option<TypeSymbol>,
 }

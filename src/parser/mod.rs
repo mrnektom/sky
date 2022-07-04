@@ -2,29 +2,32 @@ pub mod ast;
 
 pub(crate) mod lexer;
 
-mod scope;
-mod symbols;
-mod types;
+pub(crate) mod scope;
+pub(crate) mod symbols;
+pub(crate) mod types;
 
-use std::{ops::DerefMut, rc::Rc, usize};
+use std::{collections::HashMap, usize};
 
 use crate::{
     error::{Error, ErrorKind},
     parser::{
         ast::{BinOp, BinOpKind, Call, Expr, IfExpr, NumExpr, VarDefExpr},
         lexer::{Lexer, LitKind, Token, TokenKind},
-        scope::{ScopePtr, ScopeT},
-        symbols::Symbol,
-        types::Type,
     },
 };
 
-#[derive(Debug)]
+use self::{
+    ast::FnExpr,
+    scope::Scope,
+    symbols::{Symbol, UnkownSymbol},
+    types::Type,
+};
+
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
     pub errors: Vec<Error>,
     code: &'a str,
-    scope_stack: Vec<ScopePtr>,
+    scope_stack: Vec<Scope>,
 }
 
 impl<'a> Parser<'a> {
@@ -38,7 +41,7 @@ impl<'a> Parser<'a> {
     }
     pub fn parse_top(&mut self) -> Option<Expr> {
         let mut exprs = Vec::new();
-        self.scope_stack.push(ScopePtr::new_named("global"));
+        self.scope_stack.push(Scope::new_named("global"));
         while !self.lexer.eof() {
             let expr = self.parse_expr();
             if expr.is_some() {
@@ -53,7 +56,7 @@ impl<'a> Parser<'a> {
         if exprs.len() == 1 {
             exprs.pop()
         } else {
-            Some(Expr::CodeBlock(exprs, self.scope_stack.pop()?))
+            Some(Expr::CodeBlock(exprs))
         }
     }
     fn parse_expr(&mut self) -> Option<Expr> {
@@ -83,9 +86,9 @@ impl<'a> Parser<'a> {
         match self.lexer.get_tok()? {
             "if" => self.parse_if(),
             "let" => self.parse_let(),
-            _ => Some(Expr::Symbol(
-                self.scope().get_sym(self.lexer.get_tok().unwrap()).unwrap(),
-            )),
+            "fn" => self.parse_fn(),
+            "null" => Some(Expr::Null),
+            _ => self.parse_sym(),
         }
     }
     fn parse_if(&mut self) -> Option<Expr> {
@@ -110,11 +113,11 @@ impl<'a> Parser<'a> {
         }
         self.lexer.next();
         self.skip_whitespace();
-        let mut isMut = false;
+        let mut is_mut = false;
         let mut name = String::new();
         let mut initial = None;
         if self.has_str("mut") {
-            isMut = true;
+            is_mut = true;
             self.lexer.next();
         }
         self.skip_whitespace();
@@ -122,7 +125,7 @@ impl<'a> Parser<'a> {
             name.push_str(self.lexer.get_tok()?);
             self.lexer.next();
         } else {
-            isMut = false;
+            is_mut = false;
             name.push_str("mut");
         }
         self.skip_whitespace();
@@ -133,22 +136,38 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
             initial = Some(Box::new(self.parse_expr()?));
         }
-        self.scope().set_sym(
-            name.as_str(),
-            Symbol::Var(Rc::new(Type::from(*initial.unwrap()))),
-        );
         Some(Expr::VarDef(Box::new(VarDefExpr {
             name,
-            isMut,
+            is_mut,
             initial,
         })))
     }
+
+    fn parse_fn(&mut self) -> Option<Expr> {
+        let mut name = "<anonymous>";
+        let mut args: HashMap<String, Type> = HashMap::new();
+        let mut ret = Expr::Null;
+        if self._get_tok_val(self.lexer.peek()?)? == "fn" {
+            self.lexer.next();
+        }
+        let mut tok = self.lexer.peek()?;
+        if tok.kind == TokenKind::Ident {
+            name = self._get_tok_val(tok)?;
+        }
+
+        Some(Expr::Fn(FnExpr {
+            name: name.to_string(),
+            args,
+            ret: Box::new(ret),
+        }))
+    }
+
     fn parse_block(&mut self) -> Option<Expr> {
         if !self.has_str("{") {
             return None;
         }
         self.scope_stack
-            .push(self.scope_stack.last().unwrap().extend());
+            .push(self.scope_stack.last().unwrap().child());
         self.lexer.next();
         let mut buff = Vec::new();
         while !self.has_str("}") {
@@ -162,7 +181,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Some(Expr::CodeBlock(buff, self.scope_stack.pop().unwrap()))
+        Some(Expr::CodeBlock(buff))
     }
     fn parse_num(&mut self) -> Option<Expr> {
         if let Some(Token {
@@ -398,6 +417,38 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_sym(&mut self) -> Option<Expr> {
+        let tok = self.lexer.peek()?;
+        match tok.kind {
+            TokenKind::Ident => {
+                let sym = Expr::Symbol(Symbol::Unkown(UnkownSymbol {
+                    name: self._get_tok_val(tok)?.to_owned(),
+                    line: 0,
+                    col: 0,
+                }));
+                self.lexer.next();
+                self.lexer.eat_whitespace();
+                let tok = self.lexer.peek();
+                match tok {
+                    Some(tok) => match tok.kind {
+                        TokenKind::Colon => {
+                            self.lexer.next();
+                            let right = self.parse_sym();
+                            if right.is_some() {
+                                Some(Expr::NSAccess(Box::new(sym), Box::new(right?)))
+                            } else {
+                                Some(sym)
+                            }
+                        }
+                        _ => Some(sym),
+                    },
+                    _ => Some(sym),
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn push_error(&mut self, kind: ErrorKind, index: usize, len: usize) {
         dbg!(self.get_str(index, len));
         self.errors.push(Error::new(kind, index, len));
@@ -432,45 +483,16 @@ impl<'a> Parser<'a> {
             None => false,
         }
     }
-    pub fn get_tok_val(&self, tok: Token) -> Option<&str> {
+    pub fn _get_tok_val(&self, tok: Token) -> Option<&str> {
         self.code.get(tok.index..(tok.index + tok.size))
     }
     pub fn get_str(&self, index: usize, len: usize) -> Option<&str> {
         self.code.get(index..(index + len))
     }
-    fn scope(&self) -> ScopePtr {
+    fn scope(&self) -> Scope {
         self.scope_stack.last().unwrap().clone()
     }
 }
-
-// fn line_by_index(index: usize, source: &str) -> (usize, String) {
-//     let mut start = index;
-//     let mut end = index;
-//     while start > 0 {
-//         if let Some("\n") = source.get(start..=start) {
-//             break;
-//         }
-//         start -= 1;
-//     }
-//     while end < usize::MAX {
-//         if let Some("\n") | None = source.get(end..=end) {
-//             break;
-//         }
-//         end += 1;
-//     }
-//     (index - start, source.get(start..end).unwrap().to_string())
-// }
-
-// fn line_number_by_index(mut index: usize, source: &str) -> usize {
-//     let mut line = 0;
-//     while index > 0 {
-//         index -= 1;
-//         if source.get(index..=index) == Some("\n") {
-//             line += 1;
-//         }
-//     }
-//     line
-// }
 
 fn escape_str(src: &str) -> String {
     let mut buf = String::new();
