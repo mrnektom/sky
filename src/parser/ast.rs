@@ -1,112 +1,179 @@
-use std::collections::HashMap;
-
-use super::{symbols::Symbol, types::Type};
-
-#[derive(Debug, Clone)]
-pub enum Expr {
-    Num(NumExpr),
-    Str(String),
-    BinOp(Box<BinOp>),
-    CodeBlock(Vec<Expr>),
-    Closure(Vec<Expr>, Box<Expr>),
-    Fn(FnExpr),
-    If(Box<IfExpr>),
-    Call(Box<Call>),
-    List(Vec<Expr>),
-    VarDef(Box<VarDefExpr>),
-    Symbol(Symbol),
-    NSAccess(Box<Expr>, Box<Expr>),
-    Null,
+#[derive(Debug, PartialEq)]
+pub struct Module {
+    pub statements: Vec<Stmt>,
 }
 
-#[derive(Debug, Clone)]
-pub struct VarDefExpr {
+#[derive(Debug, PartialEq)]
+pub enum Stmt {
+    Import {
+        symbols: Vec<ImportedSymbol>,
+        path: String,
+    },
+    Var {
+        name: String,
+        is_mut: bool,
+        value: Expr,
+    },
+    Const {
+        name: String,
+        value: Expr,
+    },
+    Function {
+        name: String,
+        params: Vec<FunctionParam>,
+        ret_type: TypeUsage,
+        body: Vec<Stmt>,
+    },
+    Expr(Expr),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct FunctionParam {
     pub name: String,
-    pub is_mut: bool,
-    pub initial: Option<Box<Expr>>,
+    pub r#type: TypeUsage,
 }
 
-#[derive(Debug, Clone)]
-pub struct IfExpr {
-    pub cond: Expr,
-    pub then_branch: Expr,
-    pub else_branch: Option<Expr>,
-}
-
-/// structure of binary operator node
-#[derive(Debug, Clone)]
-pub struct BinOp {
-    pub kind: BinOpKind,
-    pub left: Expr,
-    pub right: Expr,
-}
-
-/// sructure of call node
-#[derive(Debug, Clone)]
-pub struct Call {
-    pub callee: Expr,
-    pub args: Vec<Expr>,
-}
-#[derive(Debug, Clone)]
-pub struct FnExpr {
-    pub name: String,
-    pub args: HashMap<String, Type>,
-    pub ret: Box<Expr>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinOpKind {
-    /// pattern = expr
-    Assign,
-    /// expr == expr
-    Eq,
-    /// expr <= expr
-    LtEq,
-    /// expr >= expr
-    GtEq,
-    /// expr < expr
-    Lt,
-    /// expr > expr
-    Gt,
-    /// expr + expr
-    Add,
-    /// expr * expr
-    Mul,
-    /// expr / expr
-    Div,
-    /// expr % expr
-    Mod,
-    /// expr - expr
-    Sub,
-    /// expr ** expr
-    Pow,
-}
-
-impl Into<u8> for BinOpKind {
-    fn into(self) -> u8 {
-        match self {
-            Self::Assign => 1,
-            Self::Eq => 2,
-            Self::LtEq => 2,
-            Self::GtEq => 2,
-            Self::Lt => 2,
-            Self::Gt => 2,
-            Self::Add => 3,
-            Self::Sub => 3,
-            Self::Mul => 4,
-            Self::Div => 4,
-            Self::Mod => 4,
-            Self::Pow => 5,
+impl FunctionParam {
+    pub fn new(name: &str, t: TypeUsage) -> Self {
+        Self {
+            name: name.to_string(),
+            r#type: t,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum NumExpr {
-    I32(i32),
-    I64(i64),
-    U32(u32),
-    U64(u64),
-    F32(f32),
-    F64(f64),
+#[derive(Debug, PartialEq)]
+pub struct TypeUsage {
+    pub name: String,
+    pub params: Vec<TypeUsage>,
+}
+
+impl TypeUsage {
+    pub fn from_name(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            params: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ImportedSymbol {
+    pub name: String,
+    pub imported_as: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum BinaryOpKind {
+    /// Addition +
+    Add,
+    /// Substraction -
+    Sub,
+    /// Multiply *
+    Mul,
+    /// Dividion /
+    Div,
+    /// %
+    Rem,
+    DotAccess,
+    BracketAccess,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Expr {
+    Integer(i32),
+    Float(f32),
+    String(String),
+    Ident(String),
+    BinaryOp {
+        kind: BinaryOpKind,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Call {
+        target: Box<Expr>,
+        arguments: Vec<CallArgument>
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct CallArgument {
+    pub name: Option<String>,
+    pub expr: Expr
+}
+
+impl Expr {
+    pub fn bin_add(left: Expr, right: Expr) -> Self {
+        Self::BinaryOp {
+            kind: BinaryOpKind::Add,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+
+    pub fn bin_sub(left: Expr, right: Expr) -> Self {
+        Self::BinaryOp {
+            kind: BinaryOpKind::Sub,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+
+    pub fn bin_mul(left: Expr, right: Expr) -> Self {
+        Self::BinaryOp {
+            kind: BinaryOpKind::Mul,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+
+    pub fn bin_div(left: Expr, right: Expr) -> Self {
+        Self::BinaryOp {
+            kind: BinaryOpKind::Div,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+
+    pub fn bin_rem(left: Expr, right: Expr) -> Self {
+        Self::BinaryOp {
+            kind: BinaryOpKind::Rem,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+    pub fn dot_access(left: Expr, right: Expr) -> Self {
+        Self::BinaryOp {
+            kind: BinaryOpKind::DotAccess,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+    pub fn bracket_access(left: Expr, right: Expr) -> Self {
+        Self::BinaryOp {
+            kind: BinaryOpKind::BracketAccess,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+}
+
+pub mod pattern {
+    #[derive(Debug, PartialEq)]
+    pub enum Pattern {
+        Tuple(Vec<Box<Pattern>>),
+        Struct {
+            name: String,
+            fields: Vec<StructField>,
+        },
+        Integer(i32),
+        Float(f32),
+        String(String),
+    }
+
+    #[derive(Debug, PartialEq)]
+    pub struct StructField {
+        pub name: String,
+        pub pattern: Pattern,
+    }
 }

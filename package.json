@@ -1,0 +1,14 @@
+{
+  "name": "sky",
+  "version": "0.0.1",
+  "description": "Sky language compiler",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "compiler"
+  ],
+  "author": "MrNektom",
+  "license": "ISC"
+}

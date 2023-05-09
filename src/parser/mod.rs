@@ -1,562 +1,485 @@
-pub mod ast;
+use peg::{error::ParseError, str::LineCol};
 
-pub(crate) mod lexer;
+use self::ast::Module;
 
-pub(crate) mod scope;
-pub(crate) mod symbols;
-pub(crate) mod types;
+mod ast;
+mod stmt;
 
-use std::{collections::HashMap, usize};
+peg::parser! {
+    grammar parser() for str {
 
-use crate::{
-    error::{Error, ErrorKind},
-    parser::{
-        ast::{BinOp, BinOpKind, Call, Expr, IfExpr, NumExpr, VarDefExpr},
-        lexer::{Lexer, LitKind, Token, TokenKind},
-    },
-};
+    use ast::{
+        Expr,
+        FunctionParam,
+        ImportedSymbol,
+        Module,
+        Stmt,
+        TypeUsage,
+        CallArgument
+    };
+    use ast::pattern::{Pattern, StructField};
 
-use self::{
-    ast::FnExpr,
-    scope::Scope,
-    symbols::{Symbol, UnkownSymbol},
-    types::Type,
-};
+    //
+    // <PRIMITIVES>
+    //
 
-pub struct Parser<'a> {
-    lexer: Lexer<'a>,
-    pub errors: Vec<Error>,
-    code: &'a str,
-    scope_stack: Vec<Scope>,
+    rule any() = [_]
+    rule numeric() = ['0'..='9']+
+    rule alpha() = ['a'..='z' | 'A'..='Z']
+    rule sp() =
+        quiet! {[' ' | '\n' | '\t' | '\r' ]*}
+        / expected!("space")
+    rule escape_sequence() = "\\\\" / "\\\"" / "\\\'" / "\\n" / "\\r" / "\\t" / "\\0"
+
+    rule alphanumeric() = (alpha() / numeric())
+    rule literal_char() = escape_sequence() / (!"\"" any())
+
+
+
+    rule colon_prefixed<T>(r: rule<T>) -> T =
+        colon()
+        r:r() { r }
+
+    rule comma_separated<T>(r: rule<T>) -> Vec<T> =
+        r() ** comma()
+
+    rule spaced<T>(x: rule<T>) -> T =
+        sp() r:x() sp() { r }
+
+    rule curly_braced<T>(r: rule<T>) -> T = spaced(<"{">) r:r() spaced(<"}">) { r }
+    rule angle_braced<T>(r: rule<T>) -> T = spaced(<"<">) r:r() spaced(<">">) { r }
+    rule round_braced<T>(r: rule<T>) -> T = spaced(<"(">) r:r() spaced(<")">) { r }
+    rule rect_braced<T>(r: rule<T>) -> T = spaced(<"[">) r:r() spaced(<"]">) { r }
+
+    rule import_kw() = spaced(<"import">)
+    rule from_kw() = spaced(<"from">)
+    rule mut_kw() = spaced(<"mut">)
+    rule let_kw() = spaced(<"let">)
+    rule const_kw() = spaced(<"const">)
+    rule fn_kw() = spaced(<"fn">)
+    rule as_kw() = spaced(<"as">)
+    rule assign() = spaced(<"=">)
+    rule comma() = spaced(<",">)
+    rule colon() = spaced(<":">)
+    rule semicolon() = spaced(<";">)
+    rule dot() = spaced(<".">)
+    pub rule string_literal() -> &'input str =
+        "\"" s:$(literal_char()*) "\"" { s }
+
+    rule int_literal() -> i32 =
+        i:$(numeric()) {?
+            i.parse().or(Err("Can't parse integer"))
+        }
+
+
+    rule float_literal() -> f32 =
+        f:$(numeric() "." numeric()) {?
+            f.parse().or(Err("Can't parse float"))
+        }
+
+    pub rule ident() -> &'input str =
+        $(alpha() alphanumeric()*)
+    //
+    // </PRIMITIVES>
+    //
+
+    //
+    // <PATTERNS>
+    //
+
+    rule tuple_pattern() -> Pattern =
+        "(" ps:(pattern() ** ",") ")" {
+            Pattern::Tuple(
+                ps.into_iter()
+                    .map(|p| Box::new(p))
+                    .collect()
+            )
+        }
+
+    rule struct_pattern() -> Pattern =
+        n:struct_name()
+        b:struct_body() {
+            Pattern::Struct { name: n.to_string(), fields: b }
+        }
+
+        rule struct_name() -> &'input str = ident()
+
+        rule struct_body() -> Vec<StructField> =
+            curly_braced(<struct_field_list()>)
+
+        rule struct_field_list() -> Vec<StructField> =
+            struct_field() ** comma()
+
+        rule struct_field() -> StructField =
+            n:ident()
+            colon()
+            p:pattern() {
+                StructField {
+                    name: n.to_string(),
+                    pattern: p
+                }
+            }
+
+    rule int_pattern() -> Pattern =
+        i:int_literal() {
+            Pattern::Integer(i)
+        }
+
+    rule float_pattern() -> Pattern =
+        i:float_literal() {
+            Pattern::Float(i)
+        }
+    rule string_pattern() -> Pattern =
+        s:string_literal() {
+            Pattern::String(s.to_string())
+        }
+
+    rule pattern() -> Pattern =
+        float_pattern()
+        / int_pattern()
+        / tuple_pattern()
+        /string_pattern()
+
+    //
+    // </PATTERNS>
+    //
+
+    //
+    // <TYPE_USAGES>
+    //
+
+    rule type_usage() -> TypeUsage =
+        name:spaced(<ident()>)
+        params:type_param_list()? {
+            TypeUsage {
+                name: name.to_string(),
+                params: params.unwrap_or_else(|| Vec::new()),
+            }
+        }
+
+        rule type_param_list() -> Vec<TypeUsage> =
+            params:angle_braced(<
+                comma_separated(<
+                    type_usage()
+                >)
+            >) { params }
+
+
+
+
+    //
+    // </TYPE_USAGES>
+    //
+
+    //
+    // <EXPRESSIONS>
+    //
+
+    pub rule float() -> Expr =
+        f:float_literal() {
+            Expr::Float(f)
+        }
+
+    pub rule int() -> Expr =
+        i:int_literal() {
+            Expr::Integer(i)
+        }
+
+    rule string() -> Expr =
+        s:string_literal() {
+            Expr::String(s.to_string())
+        }
+
+    rule ident_expr() -> Expr =
+        i:ident() {
+            Expr::Ident(i.to_string())
+        }
+
+    rule expr_arith() -> Expr = precedence! {
+        x:(@) "+" y:@ { Expr::bin_add(x, y) }
+        x:(@) "-" y:@ { Expr::bin_sub(x, y) }
+        --
+        x:(@) "*" y:@ { Expr::bin_mul(x, y) }
+        x:(@) "/" y:@ { Expr::bin_div(x, y) }
+        x:(@) "%" y:@ { Expr::bin_rem(x, y) }
+        --
+        x:(@) "." y:@ { Expr::dot_access(x, y) }
+        --
+        e:spaced(<float()>){e}
+        e:spaced(<int()>){e}
+        e:spaced(<string()>){e}
+        e:spaced(<ident_expr()>){e}
+        e:round_braced(<expr()>) {e}
+    }
+
+    rule call_arguments()-> Vec<CallArgument> =
+        round_braced(<comma_separated(<call_argument()>)>)
+
+    rule call_argument() -> CallArgument =
+        name:call_argument_name()? expr:spaced(<expr()>) {
+            CallArgument {
+                name: name.map(str::to_string),
+                expr,
+            }
+        }
+
+        rule call_argument_name() -> &'input str =
+            n:spaced(<ident()>) assign() { n }
+
+    #[cache_left_rec]
+    rule expr() -> Expr =
+        l:expr() r:rect_braced(<expr()>) {
+            Expr::bracket_access(l, r)
+        }
+        / l:expr() args:call_arguments() {
+            Expr::Call { target: Box::new(l), arguments: args }
+        }
+        / l:expr()
+        / expr_arith()
+
+    //
+    // </EXPRESSIONS>
+    //
+
+    //
+    // <STATEMENTS>
+    //
+
+    pub rule import_stmt() -> Stmt =
+        import_kw()
+        symbols:curly_braced(<
+            imported_sumbol_list()
+        >)
+        from_kw()
+        path:string_literal() {
+            Stmt::Import { symbols, path: path.to_string() }
+        }
+
+        rule imported_sumbol_list() -> Vec<ImportedSymbol> =
+            symbols:spaced(<
+                comma_separated(<
+                    imported_symbol()
+                >)
+            >) { symbols }
+
+        rule imported_symbol() -> ImportedSymbol =
+            name:(ident())
+            imported_as:imported_symbol_alias() {
+                ImportedSymbol {
+                    name: name.to_string(),
+                    imported_as
+                }
+            }
+        rule imported_symbol_alias() -> Option<String> =
+            alias:(as_kw() n:ident() { n })? {
+                alias.map(str::to_string)
+            }
+
+
+
+    // Rule for parsing any statements
+    rule stmt() -> Stmt =
+        import_stmt()
+        / definition()
+        / e:expr() { Stmt::Expr(e) }
+
+    rule stmt_separator() =
+        semicolon()? {}
+
+    rule stmts() -> Vec<Stmt> = stmt() ** stmt_separator()
+
+    //
+    // </STATEMENTS>
+    //
+
+    //
+    // <DEFINITIONS>
+    //
+
+    pub rule function_definition() -> Stmt =
+        fn_kw()
+        name:ident()
+        params:function_param_list()
+        ret_type:function_type()
+        body:function_body() {
+            Stmt::Function {
+                name: name.to_string(),
+                params,
+                ret_type,
+                body
+            }
+        }
+
+        rule function_param_list() -> Vec<FunctionParam> =
+            params:round_braced(<
+                comma_separated(<
+                    function_param()
+                >)
+            >) { params }
+
+            rule function_param() -> FunctionParam =
+                name:ident()
+                colon()
+                t:type_usage() {
+                    FunctionParam::new(name, t)
+                }
+        rule function_type() -> TypeUsage =
+            t:colon_prefixed(<
+                type_usage()
+            >)? {
+                t.unwrap_or_else(||
+                    TypeUsage::from_name("Unit")
+                )
+            }
+
+        rule function_body() -> Vec<Stmt> =
+            sp() s:curly_braced(<stmts()>) { s }
+            / assign() s:stmt() { Vec::from([s]) }
+
+    pub rule var_definition() -> Stmt =
+        var()
+        / constant()
+
+        rule var() -> Stmt =
+            let_kw()
+            is_mut:optional_mut()
+            name:ident()
+            assign()
+            e:expr() {
+                Stmt::Var {
+                    name: name.to_string(),
+                    is_mut,
+                    value: e
+                }
+            }
+        rule constant() -> Stmt =
+            const_kw()
+            name:ident()
+            assign()
+            e:expr() {
+                Stmt::Const {
+                    name: name.to_string(),
+                    value: e
+                }
+            }
+        rule optional_mut() -> bool =
+            m:(mut_kw() {})? { m.is_some() }
+
+    // Rule for parsing any definitions
+    rule definition() -> Stmt =
+        function_definition()
+        / var_definition()
+
+    //
+    // </DEFINITIONS>
+    //
+
+    // Root rule for parsing whole source
+    pub rule module() -> Module =
+        sp() stmts:(stmt() ** stmt()) sp() {
+            Module {
+                statements: stmts
+            }
+        }
+  }
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(code: &'a str) -> Self {
-        Self {
-            lexer: Lexer::new(code),
-            errors: Vec::new(),
-            code,
-            scope_stack: Vec::new(),
-        }
-    }
-    pub fn parse_top(&mut self) -> Option<Expr> {
-        let mut exprs = Vec::new();
-        self.scope_stack.push(Scope::new_named("global"));
-        while !self.lexer.eof() {
-            let expr = self.parse_expr();
-            if expr.is_some() {
-                exprs.push(expr.unwrap());
-                if self.has_str(";") {
-                    self.lexer.next();
-                }
-            } else {
-                break;
-            }
-        }
-        if exprs.len() == 1 {
-            exprs.pop()
-        } else {
-            Some(Expr::CodeBlock(exprs))
-        }
-    }
-    fn parse_expr(&mut self) -> Option<Expr> {
-        let mut expr = self.parse_atom()?;
-        expr = self.maybe_call(expr);
-        expr = self.maybe_binary(expr);
-        Some(expr)
-    }
-    fn parse_atom(&mut self) -> Option<Expr> {
-        self.skip_whitespace();
-        let tok = self.lexer.peek()?;
-        match tok.kind {
-            TokenKind::Lit { kind } => match kind {
-                LitKind::Num { .. } => self.parse_num(),
-                LitKind::Str => self.parse_str(),
-            },
-            TokenKind::OpenParen => self.parse_tuple(),
-            TokenKind::OpenBrace => self.parse_block(),
-            TokenKind::Ident => self.parse_ident(),
-            _ => {
-                self.push_error(ErrorKind::UnexpectedToken, tok.index, tok.size);
-                None
-            }
-        }
-    }
-    fn parse_ident(&mut self) -> Option<Expr> {
-        match self.lexer.get_tok()? {
-            "if" => self.parse_if(),
-            "let" => self.parse_let(),
-            "fn" => self.parse_fn(),
-            "null" => Some(Expr::Null),
-            _ => self.parse_sym(),
-        }
-    }
-    fn parse_if(&mut self) -> Option<Expr> {
-        self.lexer.next();
-        let cond = self.parse_expr()?;
-        let then_branch = self.parse_expr()?;
-        let mut else_branch = None;
-        self.skip_whitespace();
-        if self.has_str("else") {
-            self.lexer.next();
-            else_branch = self.parse_expr();
-        }
-        Some(Expr::If(Box::new(IfExpr {
-            cond,
-            then_branch,
-            else_branch,
-        })))
-    }
-    fn parse_let(&mut self) -> Option<Expr> {
-        if !self.has_str("let") {
-            return None;
-        }
-        self.lexer.next();
-        self.skip_whitespace();
-        let mut is_mut = false;
-        let mut name = String::new();
-        let mut initial = None;
-        if self.has_str("mut") {
-            is_mut = true;
-            self.lexer.next();
-        }
-        self.skip_whitespace();
-        if self.has_type(TokenKind::Ident) {
-            name.push_str(self.lexer.get_tok()?);
-            self.lexer.next();
-        } else {
-            is_mut = false;
-            name.push_str("mut");
-        }
-        self.skip_whitespace();
-        dbg!(self.lexer.peek());
+pub fn parse(source: &str) -> Result<Module, ParseError<LineCol>> {
+    parser::module(source)
+}
 
-        if self.has_type(TokenKind::Eq) {
-            self.lexer.next();
-            self.skip_whitespace();
-            initial = Some(Box::new(self.parse_expr()?));
-        }
-        Some(Expr::VarDef(Box::new(VarDefExpr {
-            name,
-            is_mut,
-            initial,
-        })))
+#[cfg(test)]
+mod tests {
+    use crate::parser::ast::{Expr, FunctionParam, ImportedSymbol, Stmt, TypeUsage};
+
+    use super::parser;
+
+    #[test]
+    fn parse_float() {
+        assert_eq!(parser::float("3.14"), Ok(Expr::Float(3.14)))
     }
 
-    fn parse_fn(&mut self) -> Option<Expr> {
-        let mut name = "<anonymous>";
-        let mut args: HashMap<String, Type> = HashMap::new();
-        let mut ret = Expr::Null;
-        if self._get_tok_val(self.lexer.peek()?)? == "fn" {
-            self.lexer.next();
-        }
-        let mut tok = self.lexer.peek()?;
-        if tok.kind == TokenKind::Ident {
-            name = self._get_tok_val(tok)?;
-        }
-
-        Some(Expr::Fn(FnExpr {
-            name: name.to_string(),
-            args,
-            ret: Box::new(ret),
-        }))
+    #[test]
+    fn parse_int() {
+        assert_eq!(parser::int("2854"), Ok(Expr::Integer(2854)))
     }
 
-    fn parse_block(&mut self) -> Option<Expr> {
-        if !self.has_str("{") {
-            return None;
-        }
-        self.scope_stack
-            .push(self.scope_stack.last().unwrap().child());
-        self.lexer.next();
-        let mut buff = Vec::new();
-        while !self.has_str("}") {
-            buff.push(self.parse_expr()?);
-            if self.has_str(";") {
-                self.lexer.next();
-            }
-            self.skip_whitespace();
-            if self.lexer.get_str(1) == Some("}") {
-                self.lexer.next();
-                break;
-            }
-        }
-        Some(Expr::CodeBlock(buff))
-    }
-    fn parse_num(&mut self) -> Option<Expr> {
-        if let Some(Token {
-            kind:
-                TokenKind::Lit {
-                    kind: LitKind::Num { base, suff_off },
-                },
-            size,
-            index,
-        }) = self.lexer.next()
-        {
-            let mut start = index;
-            let mut end = index + size;
-            let mut radix = 10;
-            if let Some(base) = base {
-                start += 2;
-                radix = base.into();
-            }
-            let suff = match suff_off {
-                Some(offset) => {
-                    end = index + offset;
-                    self.code.get(index + offset..index + size)
-                }
-                None => None,
-            };
-            let mut val = self.code.get(start..end)?;
-            let base = match base {
-                None => 10,
-                Some(b) => b.into(),
-            };
-            let expr = Expr::Num(match suff {
-                Some("i32") => {
-                    if val.contains('.') {
-                        val = val.get(..val.find('.')?)?;
-                    }
-                    NumExpr::I32(i32::from_str_radix(val, radix).ok()?)
-                }
-                Some("i64") => {
-                    if val.contains('.') {
-                        val = val.get(..val.find('.')?)?;
-                    }
-                    NumExpr::I64(i64::from_str_radix(val, radix).ok()?)
-                }
-                Some("u32") => {
-                    if val.contains('.') {
-                        val = val.get(..val.find('.')?)?;
-                    }
-                    NumExpr::U32(u32::from_str_radix(val, radix).ok()?)
-                }
-                Some("u64") => {
-                    if val.contains('.') {
-                        val = val.get(..val.find('.')?)?;
-                    }
-                    NumExpr::U64(u64::from_str_radix(val, radix).ok()?)
-                }
-                Some("f32") => NumExpr::F32(parse_based_f32(base, val)?),
-                Some("f64") => NumExpr::F64(parse_based_f64(base, val)?),
-                None if val.contains('.') => NumExpr::F32(val.parse().ok()?),
-                None => NumExpr::I32(i32::from_str_radix(val, radix).ok()?),
-                Some(suff) => {
-                    self.push_error(
-                        ErrorKind::UnexpectedToken,
-                        suff_off.unwrap_or(0),
-                        suff.len(),
-                    );
-                    return None;
-                }
-            });
-            Some(expr)
-        } else {
-            None
-        }
+    #[test]
+    fn read_ident() {
+        assert_eq!(parser::ident("input12345"), Ok("input12345"));
+        assert_eq!(parser::ident("input"), Ok("input"));
     }
 
-    fn parse_str(&mut self) -> Option<Expr> {
-        if let Some(Token {
-            kind: _,
-            size,
-            index,
-        }) = self.lexer.next()
-        {
-            let string = self.code.get(index + 1..index + size - 1)?;
-
-            Some(Expr::Str(escape_str(string)))
-        } else {
-            None
-        }
+    #[test]
+    fn string_literal() {
+        assert_eq!(
+            parser::string_literal(r#""icyh\"nln\" ""#),
+            Ok("icyh\\\"nln\\\" ")
+        )
     }
-
-    fn maybe_call(&mut self, left: Expr) -> Expr {
-        if self.has_str("(") {
-            let args = self.parse_tuple();
-            if args.is_some() {
-                match args.unwrap() {
-                    Expr::List(list) => Expr::Call(Box::new(Call {
-                        args: list,
-                        callee: left,
-                    })),
-                    _ => left,
-                }
-            } else {
-                left
-            }
-        } else {
-            left
-        }
-    }
-    fn parse_tuple(&mut self) -> Option<Expr> {
-        self.lexer.eat_whitespace();
-        if self.has_str("(") {
-            self.lexer.next();
-            let mut list = Vec::new();
-            while !self.has_str(")") {
-                let expr = self.parse_expr()?;
-                list.push(expr);
-                if self.has_str(",") {
-                    self.lexer.next();
-                }
-            }
-            self.lexer.eat_whitespace();
-            self.lexer.next();
-            Some(Expr::List(list))
-        } else {
-            None
-        }
-    }
-    fn maybe_binary(&mut self, left: Expr) -> Expr {
-        self.skip_whitespace();
-        if self.lexer.eof() {
-            return left;
-        }
-        let Token {
-            kind: _,
-            size: _,
-            index: _,
-        } = self.lexer.peek().unwrap();
-        if let Some(kind) = self.parse_bin_op() {
-            let priory: u8 = kind.clone().into();
-            let mut expr: Expr;
-            let right = self.parse_expr();
-            if right.is_none() {
-                return left;
-            }
-            let right = right.unwrap();
-            if let Expr::BinOp(right) = right {
-                let r_priory: u8 = right.kind.clone().into();
-                if priory >= r_priory {
-                    expr = Expr::BinOp(Box::new(BinOp {
-                        kind,
-                        left,
-                        right: right.left,
-                    }));
-                    expr = Expr::BinOp(Box::new(BinOp {
-                        kind: right.kind,
-                        left: expr,
-                        right: right.right,
-                    }));
-                } else {
-                    expr = Expr::BinOp(Box::new(BinOp {
-                        kind: right.kind,
-                        left: right.left,
-                        right: right.right,
-                    }));
-                    expr = Expr::BinOp(Box::new(BinOp {
-                        kind,
-                        left,
-                        right: expr,
-                    }));
-                }
-            } else {
-                expr = Expr::BinOp(Box::new(BinOp { kind, left, right }));
-            }
-            expr
-        } else {
-            left
-        }
-    }
-
-    fn parse_bin_op(&mut self) -> Option<BinOpKind> {
-        self.skip_whitespace();
-        match self.lexer.peek()?.kind {
-            TokenKind::Eq => {
-                self.lexer.next();
-                Some(match self.lexer.peek()?.kind {
-                    TokenKind::Eq => {
-                        self.lexer.next();
-                        BinOpKind::Eq
-                    }
-                    _ => BinOpKind::Assign,
-                })
-            }
-            TokenKind::Lt => {
-                self.lexer.next();
-                Some(match self.lexer.peek()?.kind {
-                    TokenKind::Eq => {
-                        self.lexer.next();
-                        BinOpKind::LtEq
-                    }
-                    _ => BinOpKind::Lt,
-                })
-            }
-            TokenKind::Gt => {
-                self.lexer.next();
-                Some(match self.lexer.peek()?.kind {
-                    TokenKind::Eq => {
-                        self.lexer.next();
-                        BinOpKind::GtEq
-                    }
-                    _ => BinOpKind::Gt,
-                })
-            }
-            TokenKind::Add => {
-                self.lexer.next();
-                Some(BinOpKind::Add)
-            }
-            TokenKind::Sub => {
-                self.lexer.next();
-                Some(BinOpKind::Sub)
-            }
-            TokenKind::Mul => {
-                self.lexer.next();
-                Some(match self.lexer.peek()?.kind {
-                    TokenKind::Mul => {
-                        self.lexer.next();
-                        BinOpKind::Pow
-                    }
-                    _ => BinOpKind::Mul,
-                })
-            }
-            TokenKind::Div => Some(BinOpKind::Div),
-            TokenKind::Percent => Some(BinOpKind::Mod),
-            _ => None,
-        }
-    }
-
-    fn parse_sym(&mut self) -> Option<Expr> {
-        let tok = self.lexer.peek()?;
-        match tok.kind {
-            TokenKind::Ident => {
-                let sym = Expr::Symbol(Symbol::Unkown(UnkownSymbol {
-                    name: self._get_tok_val(tok)?.to_owned(),
-                    line: 0,
-                    col: 0,
-                }));
-                self.lexer.next();
-                self.lexer.eat_whitespace();
-                let tok = self.lexer.peek();
-                match tok {
-                    Some(tok) => match tok.kind {
-                        TokenKind::Colon => {
-                            self.lexer.next();
-                            let right = self.parse_sym();
-                            if right.is_some() {
-                                Some(Expr::NSAccess(Box::new(sym), Box::new(right?)))
-                            } else {
-                                Some(sym)
-                            }
-                        }
-                        _ => Some(sym),
+    #[test]
+    fn import_stmt() {
+        assert_eq!(
+            parser::import_stmt(r#"import { a as b, c} from "./path/to/file.sk""#),
+            Ok(Stmt::Import {
+                symbols: vec![
+                    ImportedSymbol {
+                        name: "a".to_string(),
+                        imported_as: Some("b".to_string())
                     },
-                    _ => Some(sym),
-                }
-            }
-            _ => None,
-        }
+                    ImportedSymbol {
+                        name: "c".to_string(),
+                        imported_as: None
+                    }
+                ],
+                path: "./path/to/file.sk".to_string()
+            })
+        )
     }
 
-    fn push_error(&mut self, kind: ErrorKind, index: usize, len: usize) {
-        dbg!(self.get_str(index, len));
-        self.errors.push(Error::new(kind, index, len));
+    #[test]
+    fn function_def_test() {
+        assert_eq!(
+            parser::function_definition("fn foo(bar: Baz<Foo>) {}"),
+            Ok(Stmt::Function {
+                name: "foo".to_string(),
+                params: vec![FunctionParam::new(
+                    "bar",
+                    TypeUsage {
+                        name: "Baz".to_string(),
+                        params: vec![TypeUsage::from_name("Foo")]
+                    }
+                )],
+                ret_type: TypeUsage::from_name("Unit"),
+                body: Vec::new()
+            })
+        )
     }
-    fn skip_whitespace(&mut self) {
-        if let Some(Token {
-            kind: TokenKind::Whitespace,
-            ..
-        }) = self.lexer.peek()
-        {
-            self.lexer.next();
-        }
-    }
-    // fn has(&mut self, token_type: TokenKind) -> bool {
-    //     match self.lexer.peek() {
-    //         None => false,
-    //         Some(Token { kind, .. }) => kind == token_type,
-    //     }
-    // }
-    fn has_str(&self, s: &str) -> bool {
-        let ss = self.lexer.get_str(s.len());
-        if Some(s) == ss {
-            true
-        } else {
-            false
-        }
-    }
-    fn has_type(&self, kind: TokenKind) -> bool {
-        let tok = self.lexer.peek();
-        match tok {
-            Some(tok) => tok.kind == kind,
-            None => false,
-        }
-    }
-    pub fn _get_tok_val(&self, tok: Token) -> Option<&str> {
-        self.code.get(tok.index..(tok.index + tok.size))
-    }
-    pub fn get_str(&self, index: usize, len: usize) -> Option<&str> {
-        self.code.get(index..(index + len))
-    }
-    fn scope(&self) -> Scope {
-        self.scope_stack.last().unwrap().clone()
-    }
-}
 
-fn escape_str(src: &str) -> String {
-    let mut buf = String::new();
-    iterate_str(src, |one, two| match one {
-        Some('\\') => match two {
-            Some('n') => buf.push('\n'),
-            Some('r') => buf.push('\r'),
-            Some('t') => buf.push('\t'),
-            Some('\\') => buf.push('\\'),
-            _ => (),
-        },
-        Some(ch) => buf.push(ch),
-        None => (),
-    });
-    buf
-}
-
-fn iterate_str<CB>(s: &str, mut call_back: CB)
-where
-    CB: FnMut(Option<char>, Option<char>),
-{
-    let mut chars = s.chars();
-    let mut one = chars.next();
-    let mut two = chars.next();
-    while one.is_some() {
-        call_back(one, two);
-        one = chars.next();
-        two = chars.next();
+    #[test]
+    fn var_definition_test() {
+        assert_eq!(
+            parser::var_definition("let a = 1"),
+            Ok(Stmt::Var {
+                name: "a".to_string(),
+                is_mut: false,
+                value: Expr::Integer(1)
+            })
+        );
+        assert_eq!(
+            parser::var_definition("let mut a = 1"),
+            Ok(Stmt::Var {
+                name: "a".to_string(),
+                is_mut: true,
+                value: Expr::Integer(1)
+            })
+        );
+        assert_eq!(
+            parser::var_definition("const a = 1"),
+            Ok(Stmt::Const {
+                name: "a".to_string(),
+                value: Expr::Integer(1)
+            })
+        );
     }
-}
-pub fn parse_based_f64(base: u32, num: &str) -> Option<f64> {
-    let mut left: f64;
-    let mut divider = 1f64;
-    let mut right: f64;
-    if num.contains('.') {
-        let mut s = num.split('.');
-        left = i32::from_str_radix(s.next()?, base).ok()? as f64;
-        right = i32::from_str_radix(s.next()?, base).ok()? as f64;
-        while divider < right {
-            divider *= 10f64;
-        }
-        right /= divider;
-        left += right;
-    } else {
-        left = i32::from_str_radix(num, base).ok()? as f64;
-    }
-    Some(left)
-}
-
-pub fn parse_based_f32(base: u32, num: &str) -> Option<f32> {
-    let mut left: f32;
-    let mut divider = 1f32;
-    let mut right: f32;
-    if num.contains('.') {
-        let mut s = num.split('.');
-        left = i32::from_str_radix(s.next()?, base).ok()? as f32;
-        right = i32::from_str_radix(s.next()?, base).ok()? as f32;
-        while divider < right {
-            divider *= 10f32;
-        }
-        right /= divider;
-        left += right;
-    } else {
-        left = i32::from_str_radix(num, base).ok()? as f32;
-    }
-    Some(left)
 }

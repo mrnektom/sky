@@ -1,0 +1,4 @@
+
+fn test() {
+    let a = num(toString)
+}
