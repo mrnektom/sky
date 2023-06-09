@@ -1,0 +1,33 @@
+fn foo() {
+    print("Hello, World")
+}
+
+struct Person {
+    name: string,
+    age: int
+}
+
+fn Person.greeting(): string {
+    `Hello, $name`
+}
+
+trait PersonInfo {
+    let infomationString: string
+
+    fn printInfo()
+}
+
+impl PersonInfo for Person {
+    let infomationString: string
+        get() = `Name: $name, Age: $age`
+
+    fn printInfo() {
+        print(infomationString)
+    }
+}
+
+fn Option<Person>.optAge(): int => {
+    Some(Person { age, .. }) = age
+    None = -1
+}
+

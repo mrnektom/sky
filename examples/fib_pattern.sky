@@ -1,0 +1,5 @@
+export fn fib(n: int): int => {
+    lt(1) = 0
+    else = fib(n - 1) + fib(n - 2)
+}
+

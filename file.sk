@@ -1,4 +1,7 @@
+import { a, b as c, d, e} from "module"
 
-fn test() {
-    let a = num(toString)
-}
+let foo = "Hello, World"
+
+let mut bar = 1 + 5
+
+const baz = alert

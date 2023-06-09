@@ -1,0 +1,14 @@
+// basic types
+
+// int
+// float
+// number
+// bool
+// char
+// string
+
+// structs
+
+struct StructName { // all user defined types named in PascalCase
+    field_name: FieldType
+}

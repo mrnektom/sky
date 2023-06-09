@@ -2,7 +2,7 @@ use peg::{error::ParseError, str::LineCol};
 
 use self::ast::Module;
 
-mod ast;
+pub mod ast;
 mod stmt;
 
 peg::parser! {
@@ -203,8 +203,6 @@ peg::parser! {
         x:(@) "/" y:@ { Expr::bin_div(x, y) }
         x:(@) "%" y:@ { Expr::bin_rem(x, y) }
         --
-        x:(@) "." y:@ { Expr::dot_access(x, y) }
-        --
         e:spaced(<float()>){e}
         e:spaced(<int()>){e}
         e:spaced(<string()>){e}
@@ -228,8 +226,11 @@ peg::parser! {
 
     #[cache_left_rec]
     rule expr() -> Expr =
-        l:expr() r:rect_braced(<expr()>) {
-            Expr::bracket_access(l, r)
+        l:expr() spaced(<".">) n:ident() {
+            Expr::DotAccess { target: Box::new(l), name: n.to_string() }
+        }
+        / l:expr() r:rect_braced(<expr()>) {
+            Expr::BracketAccess { target: Box::new(l), expr: Box::new(r) }
         }
         / l:expr() args:call_arguments() {
             Expr::Call { target: Box::new(l), arguments: args }
@@ -284,7 +285,7 @@ peg::parser! {
         / e:expr() { Stmt::Expr(e) }
 
     rule stmt_separator() =
-        semicolon()? {}
+        semicolon()?
 
     rule stmts() -> Vec<Stmt> = stmt() ** stmt_separator()
 
@@ -376,7 +377,7 @@ peg::parser! {
 
     // Root rule for parsing whole source
     pub rule module() -> Module =
-        sp() stmts:(stmt() ** stmt()) sp() {
+        stmts:spaced(<stmts()>) {
             Module {
                 statements: stmts
             }

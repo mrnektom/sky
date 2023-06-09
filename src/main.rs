@@ -1,7 +1,11 @@
+use compiler::gen;
+
 use crate::parser::parse;
 
 mod error;
 mod parser;
+mod analyzer;
+mod compiler;
 
 use std::io::prelude::*;
 use std::{env::args, error::Error, fs::File};
@@ -17,7 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let ast = parse(&source);
         match ast {
             Ok(ast) => {
-                dbg!(ast);
+                println!("{}", gen(ast));
             }
             Err(err) => {
                 println!("{}", err);

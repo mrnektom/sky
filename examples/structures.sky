@@ -1,0 +1,14 @@
+struct Foo {
+    bar: int,
+    baz: string,
+}
+
+let foo = Foo {
+    bar: 12345,
+    baz: "Some String"
+}
+
+let foo2 = Foo {
+    ...foo,
+    baz: "Hello, World"
+}

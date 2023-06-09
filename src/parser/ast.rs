@@ -75,8 +75,18 @@ pub enum BinaryOpKind {
     Div,
     /// %
     Rem,
-    DotAccess,
-    BracketAccess,
+}
+
+impl BinaryOpKind {
+    pub fn to_op(&self) -> &str {
+        match self {
+            BinaryOpKind::Add => "+",
+            BinaryOpKind::Sub => "-",
+            BinaryOpKind::Mul => "*",
+            BinaryOpKind::Div => "/",
+            BinaryOpKind::Rem => "%",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -93,6 +103,14 @@ pub enum Expr {
     Call {
         target: Box<Expr>,
         arguments: Vec<CallArgument>
+    },
+    DotAccess {
+        target: Box<Expr>,
+        name: String,
+    },
+    BracketAccess {
+        target: Box<Expr>,
+        expr: Box<Expr>
     }
 }
 
@@ -142,20 +160,7 @@ impl Expr {
             right: Box::new(right),
         }
     }
-    pub fn dot_access(left: Expr, right: Expr) -> Self {
-        Self::BinaryOp {
-            kind: BinaryOpKind::DotAccess,
-            left: Box::new(left),
-            right: Box::new(right),
-        }
-    }
-    pub fn bracket_access(left: Expr, right: Expr) -> Self {
-        Self::BinaryOp {
-            kind: BinaryOpKind::BracketAccess,
-            left: Box::new(left),
-            right: Box::new(right),
-        }
-    }
+    
 }
 
 pub mod pattern {
